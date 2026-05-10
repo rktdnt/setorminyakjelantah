@@ -1,31 +1,42 @@
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 
 export async function POST(req) {
-  const { email, password } = await req.json();
+  try {
+    const { email, password } = await req.json();
 
-  const [rows] = await db.execute(
-    `SELECT user_id, nama, email, status_akun, poin, tanggal_daftar
-     FROM users
-     WHERE email=?
-       AND (password=? OR password=MD5(?))
-     LIMIT 1`,
-    [email, password, password]
-  );
+    const hashedPassword = crypto.createHash('md5').update(password).digest('hex');
 
-  if (rows.length > 0) {
-    const user = rows[0];
-    const role = user.role || (['petugas', 'admin'].includes(user.status_akun) ? 'admin' : 'user');
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      return NextResponse.json({ success: false, message: 'Email atau password salah.' }, { status: 401 });
+    }
+
+    // Check if password matches MD5 hash or plain text (for migration)
+    if (user.password !== hashedPassword) {
+      return NextResponse.json({ success: false, message: 'Email atau password salah.' }, { status: 401 });
+    }
+
+    const role = ['petugas', 'admin'].includes(user.status_akun) ? 'admin' : 'user';
     const response = NextResponse.json({
       success: true,
       user: {
-        ...user,
+        user_id: Number(user.user_id),
+        nama: user.nama,
+        email: user.email,
+        status_akun: user.status_akun,
+        poin: user.poin,
+        tanggal_daftar: user.tanggal_daftar,
         role,
       },
     });
 
     response.cookies.set('smj_auth', encodeURIComponent(JSON.stringify({
-      user_id: user.user_id,
+      user_id: Number(user.user_id),
       nama: user.nama,
       email: user.email,
       role,
@@ -37,7 +48,8 @@ export async function POST(req) {
     });
 
     return response;
+  } catch (error) {
+    console.error('Login error:', error);
+    return NextResponse.json({ success: false, message: 'Terjadi kesalahan saat login.' }, { status: 500 });
   }
-
-  return NextResponse.json({ success: false });
 }

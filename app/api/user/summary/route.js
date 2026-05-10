@@ -1,4 +1,4 @@
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -17,25 +17,28 @@ function readAuthUser(req) {
   }
 }
 
-async function getUserPointColumn() {
-  const [columns] = await db.execute(
-    `SELECT COLUMN_NAME
-     FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE table_schema = current_schema()
-       AND TABLE_NAME = 'users'
-       AND COLUMN_NAME IN ('poin', 'points', 'total_poin', 'jumlah_poin', 'poin_user')
-     ORDER BY CASE COLUMN_NAME
-       WHEN 'poin' THEN 1
-       WHEN 'points' THEN 2
-       WHEN 'total_poin' THEN 3
-       WHEN 'jumlah_poin' THEN 4
-       WHEN 'poin_user' THEN 5
-       ELSE 99 END
-     LIMIT 1`
-  );
+const formatRelativeTime = (value) => {
+  if (!value) {
+    return '-';
+  }
 
-  return columns[0]?.COLUMN_NAME || null;
-}
+  const date = new Date(value);
+  const diff = Date.now() - date.getTime();
+  const minutes = Math.max(1, Math.round(diff / 60000));
+
+  if (minutes < 60) {
+    return `${minutes} menit lalu`;
+  }
+
+  const hours = Math.round(minutes / 60);
+
+  if (hours < 24) {
+    return `${hours} jam lalu`;
+  }
+
+  const days = Math.round(hours / 24);
+  return `${days} hari lalu`;
+};
 
 export async function GET(req) {
   const authUser = readAuthUser(req);
@@ -45,102 +48,85 @@ export async function GET(req) {
   }
 
   try {
-    const pointColumn = await getUserPointColumn();
-    const pointSelect = pointColumn ? `COALESCE(u.${pointColumn}, 0)` : '0';
-
-    const [userRows] = await db.execute(
-      `SELECT
-         u.user_id,
-         u.nama,
-         u.email,
-         u.status_akun,
-         COALESCE(sp.total_poin, ${pointSelect}) AS poin
-       FROM users u
-       LEFT JOIN saldo_poin sp ON sp.user_id = u.user_id
-       WHERE u.user_id = ?
-       LIMIT 1`,
-      [authUser.user_id]
-    );
-
-    const user = userRows[0];
+    const [user, recentSetoran, recentPenukaran, pendingAgg, approvedAgg] = await Promise.all([
+      prisma.user.findUnique({
+        where: { user_id: authUser.user_id },
+        select: {
+          user_id: true,
+          nama: true,
+          email: true,
+          status_akun: true,
+          poin: true,
+          saldoPoin: {
+            select: {
+              total_poin: true,
+            },
+          },
+        },
+      }),
+      prisma.setoranMinyak.findMany({
+        where: { user_id: authUser.user_id },
+        select: {
+          jumlah_liter: true,
+          status_verifikasi: true,
+          tanggal_setor: true,
+          poin_didapat: true,
+        },
+        orderBy: { tanggal_setor: 'desc' },
+        take: 3,
+      }),
+      prisma.penukaranReward.findMany({
+        where: { user_id: authUser.user_id },
+        select: {
+          total_poin_dipakai: true,
+          status_penukaran: true,
+          requested_at: true,
+          hadiah: {
+            select: {
+              nama_hadiah: true,
+            },
+          },
+        },
+        orderBy: { requested_at: 'desc' },
+        take: 3,
+      }),
+      prisma.setoranMinyak.aggregate({
+        where: {
+          user_id: authUser.user_id,
+          status_verifikasi: 'pending',
+        },
+        _sum: {
+          jumlah_liter: true,
+        },
+      }),
+      prisma.setoranMinyak.aggregate({
+        where: {
+          user_id: authUser.user_id,
+          status_verifikasi: 'approved',
+        },
+        _sum: {
+          jumlah_liter: true,
+        },
+      }),
+    ]);
 
     if (!user) {
       return NextResponse.json({ success: false, message: 'User tidak ditemukan.' }, { status: 404 });
     }
 
-    const [[pendingRow]] = await db.execute(
-      `SELECT COALESCE(SUM(jumlah_liter), 0) AS pendingLiter
-       FROM setoran_minyak
-       WHERE user_id = ? AND status_verifikasi = 'pending'`,
-      [authUser.user_id]
-    );
-
-    const [[approvedRow]] = await db.execute(
-      `SELECT COALESCE(SUM(jumlah_liter), 0) AS approvedLiter
-       FROM setoran_minyak
-       WHERE user_id = ? AND status_verifikasi = 'approved'`,
-      [authUser.user_id]
-    );
-
-    const [recentSetoranRows] = await db.execute(
-      `SELECT
-         jumlah_liter,
-         status_verifikasi,
-         tanggal_setor,
-         poin_didapat
-       FROM setoran_minyak
-       WHERE user_id = ?
-       ORDER BY tanggal_setor DESC
-       LIMIT 3`,
-      [authUser.user_id]
-    );
-
-    const [recentPenukaranRows] = await db.execute(
-      `SELECT
-         pr.total_poin_dipakai,
-         pr.status_penukaran,
-         pr.requested_at,
-         h.nama_hadiah
-       FROM penukaran_reward pr
-       JOIN hadiah h ON h.hadiah_id = pr.hadiah_id
-       WHERE pr.user_id = ?
-       ORDER BY pr.requested_at DESC
-       LIMIT 3`,
-      [authUser.user_id]
-    );
-
-    const formatRelativeTime = (value) => {
-      if (!value) {
-        return '-';
-      }
-
-      const date = new Date(value);
-      const diff = Date.now() - date.getTime();
-      const minutes = Math.max(1, Math.round(diff / 60000));
-
-      if (minutes < 60) {
-        return `${minutes} menit lalu`;
-      }
-
-      const hours = Math.round(minutes / 60);
-
-      if (hours < 24) {
-        return `${hours} jam lalu`;
-      }
-
-      const days = Math.round(hours / 24);
-      return `${days} hari lalu`;
-    };
+    const userPoin = user.saldoPoin?.total_poin || user.poin || 0;
+    const pendingLiter = parseFloat((pendingAgg._sum.jumlah_liter || 0).toString());
+    const approvedLiter = parseFloat((approvedAgg._sum.jumlah_liter || 0).toString());
 
     const activity = [
-      ...recentSetoranRows.map((item) => ({
-        title: `Setor ${Number(item.jumlah_liter || 0).toFixed(1)} L minyak`,
+      ...recentSetoran.map((item) => ({
+        title: `Setor ${parseFloat(item.jumlah_liter.toString()).toFixed(1)} L minyak`,
         meta: `${formatRelativeTime(item.tanggal_setor)} • ${item.status_verifikasi || 'pending'}`,
         tone: item.status_verifikasi === 'approved' ? 'ok' : item.status_verifikasi === 'rejected' ? 'reject' : 'warn',
       })),
-      ...recentPenukaranRows.map((item) => ({
-        title: `Tukar hadiah ${item.nama_hadiah}`,
-        meta: `${formatRelativeTime(item.requested_at)} • ${Number(item.total_poin_dipakai || 0)} poin`,
+      ...recentPenukaran.map((item) => ({
+        title: `Tukar hadiah ${item.hadiah.nama_hadiah}`,
+        meta: `${formatRelativeTime(item.requested_at)} • ${item.total_poin_dipakai} poin`,
         tone: item.status_penukaran === 'done' ? 'ok' : 'warn',
       })),
     ]
@@ -156,14 +142,15 @@ export async function GET(req) {
         status_akun: user.status_akun,
       },
       summary: {
-        poin: Number(user.poin || 0),
-        pendingLiter: Number(pendingRow?.pendingLiter || 0),
-        approvedLiter: Number(approvedRow?.approvedLiter || 0),
+        poin: userPoin,
+        pendingLiter,
+        approvedLiter,
       },
       activity,
-      pointsApplied: pointColumn !== null,
+      pointsApplied: true,
     });
-  } catch {
+  } catch (error) {
+    console.error('Summary error:', error);
     return NextResponse.json(
       { success: false, message: 'Gagal memuat ringkasan user.' },
       { status: 500 }

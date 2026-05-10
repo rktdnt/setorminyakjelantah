@@ -1,0 +1,249 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Cabang {
+  cabang_id    BigInt    @id @default(autoincrement())
+  kode_cabang  String    @unique @db.VarChar(30)
+  nama_cabang  String    @db.VarChar(120)
+  alamat       String?
+  aktif        Boolean   @default(true)
+  created_at   DateTime  @default(now()) @db.Timestamptz()
+  updated_at   DateTime  @default(now()) @updatedAt @db.Timestamptz()
+
+  users            User[]
+  petugas          Petugas[]
+  setoranMinyak    SetoranMinyak[]
+
+  @@map("cabang")
+}
+
+enum StatusAkunType {
+  aktif
+  nonaktif
+  petugas
+  admin
+
+  @@map("status_akun_type")
+}
+
+enum StatusPetugasType {
+  aktif
+  nonaktif
+
+  @@map("status_petugas_type")
+}
+
+enum StatusVerifikasiType {
+  pending
+  approved
+  rejected
+
+  @@map("status_verifikasi_type")
+}
+
+enum StatusHadiahType {
+  aktif
+  nonaktif
+
+  @@map("status_hadiah_type")
+}
+
+enum StatusPenukaranType {
+  pending
+  approved
+  rejected
+  done
+
+  @@map("status_penukaran_type")
+}
+
+enum JenisRewardType {
+  setoran
+  bonus
+  penyesuaian
+
+  @@map("jenis_reward_type")
+}
+
+enum JenisMutasiType {
+  credit
+  debit
+
+  @@map("jenis_mutasi_type")
+}
+
+model User {
+  user_id           BigInt              @id @default(autoincrement())
+  cabang_id         BigInt?
+  cabang            Cabang?             @relation(fields: [cabang_id], references: [cabang_id], onDelete: SetNull)
+  nama              String              @db.VarChar(120)
+  email             String              @unique @db.VarChar(190)
+  password          String              @db.VarChar(255)
+  status_akun       StatusAkunType      @default(aktif)
+  poin              Int                 @default(0)
+  tanggal_daftar    DateTime            @default(now()) @db.Timestamptz()
+  created_at        DateTime            @default(now()) @db.Timestamptz()
+  updated_at        DateTime            @default(now()) @updatedAt @db.Timestamptz()
+
+  petugas           Petugas?
+  setoranMinyak     SetoranMinyak[]
+  setoranVerified   SetoranMinyak[]     @relation("verified_by")
+  saldoPoin         SaldoPoin?
+  penukaranReward   PenukaranReward[]
+  penukaranProcess  PenukaranReward[]   @relation("processed_by")
+  rewardTransaksi   RewardTransaksi[]
+  mutasiPoint       MutasiPoint[]
+
+  @@map("users")
+}
+
+model Petugas {
+  petugas_id     BigInt              @id @default(autoincrement())
+  user_id        BigInt              @unique
+  user           User                @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  cabang_id      BigInt?
+  cabang         Cabang?             @relation(fields: [cabang_id], references: [cabang_id], onDelete: SetNull)
+  jabatan        String?             @db.VarChar(100)
+  status_petugas StatusPetugasType   @default(aktif)
+  created_at     DateTime            @default(now()) @db.Timestamptz()
+  updated_at     DateTime            @default(now()) @updatedAt @db.Timestamptz()
+
+  setoranMinyak  SetoranMinyak[]
+
+  @@map("petugas")
+}
+
+model RewardRule {
+  rule_id           BigInt              @id @default(autoincrement())
+  nama_rule         String              @db.VarChar(120)
+  minimal_liter     Decimal             @default(0) @db.Decimal(10, 2)
+  poin_per_liter    Int                 @default(10)
+  bonus_poin        Int                 @default(0)
+  aktif             Boolean             @default(true)
+  created_at        DateTime            @default(now()) @db.Timestamptz()
+  updated_at        DateTime            @default(now()) @updatedAt @db.Timestamptz()
+
+  setoranMinyak     SetoranMinyak[]
+  rewardTransaksi   RewardTransaksi[]
+
+  @@map("reward_rule")
+}
+
+model SetoranMinyak {
+  setoran_id          BigInt              @id @default(autoincrement())
+  user_id             BigInt
+  user                User                @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  petugas_id          BigInt?
+  petugas             Petugas?            @relation(fields: [petugas_id], references: [petugas_id], onDelete: SetNull)
+  cabang_id           BigInt?
+  cabang              Cabang?             @relation(fields: [cabang_id], references: [cabang_id], onDelete: SetNull)
+  rule_id             BigInt?
+  rule                RewardRule?         @relation(fields: [rule_id], references: [rule_id], onDelete: SetNull)
+  tanggal_setor       DateTime            @default(now()) @db.Timestamptz()
+  jumlah_liter        Decimal             @db.Decimal(10, 2)
+  poin_didapat        Int                 @default(0)
+  status_verifikasi   StatusVerifikasiType @default(pending)
+  verified_at         DateTime?           @db.Timestamptz()
+  verified_by         BigInt?
+  userVerified        User?               @relation("verified_by", fields: [verified_by], references: [user_id], onDelete: SetNull)
+  created_at          DateTime            @default(now()) @db.Timestamptz()
+  updated_at          DateTime            @default(now()) @updatedAt @db.Timestamptz()
+
+  rewardTransaksi     RewardTransaksi[]
+
+  @@index([user_id])
+  @@index([petugas_id])
+  @@index([cabang_id])
+  @@index([status_verifikasi])
+  @@index([tanggal_setor])
+  @@map("setoran_minyak")
+}
+
+model SaldoPoin {
+  saldo_id    BigInt    @id @default(autoincrement())
+  user_id     BigInt    @unique
+  user        User      @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  total_poin  Int       @default(0)
+  updated_at  DateTime  @default(now()) @updatedAt @db.Timestamptz()
+
+  @@map("saldo_poin")
+}
+
+model Hadiah {
+  hadiah_id           BigInt              @id @default(autoincrement())
+  nama_hadiah         String              @db.VarChar(140)
+  deskripsi           String?
+  poin_dibutuhkan     Int
+  stok                Int                 @default(0)
+  status_hadiah       StatusHadiahType    @default(aktif)
+  created_at          DateTime            @default(now()) @db.Timestamptz()
+  updated_at          DateTime            @default(now()) @updatedAt @db.Timestamptz()
+
+  penukaranReward     PenukaranReward[]
+
+  @@map("hadiah")
+}
+
+model PenukaranReward {
+  penukaran_id        BigInt              @id @default(autoincrement())
+  user_id             BigInt
+  user                User                @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  hadiah_id           BigInt
+  hadiah              Hadiah              @relation(fields: [hadiah_id], references: [hadiah_id], onDelete: Restrict)
+  jumlah              Int                 @default(1)
+  total_poin_dipakai  Int                 @default(0)
+  status_penukaran    StatusPenukaranType @default(pending)
+  requested_at        DateTime            @default(now()) @db.Timestamptz()
+  processed_at        DateTime?           @db.Timestamptz()
+  processed_by        BigInt?
+  userProcessed       User?               @relation("processed_by", fields: [processed_by], references: [user_id], onDelete: SetNull)
+  catatan             String?
+
+  @@index([user_id])
+  @@index([hadiah_id])
+  @@index([status_penukaran])
+  @@map("penukaran_reward")
+}
+
+model RewardTransaksi {
+  reward_transaksi_id BigInt              @id @default(autoincrement())
+  user_id             BigInt
+  user                User                @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  rule_id             BigInt?
+  rule                RewardRule?         @relation(fields: [rule_id], references: [rule_id], onDelete: SetNull)
+  setoran_id          BigInt?
+  setoran             SetoranMinyak?      @relation(fields: [setoran_id], references: [setoran_id], onDelete: SetNull)
+  jenis_reward        JenisRewardType     @default(setoran)
+  poin                Int
+  deskripsi           String?             @db.VarChar(255)
+  created_at          DateTime            @default(now()) @db.Timestamptz()
+
+  @@index([user_id])
+  @@index([rule_id])
+  @@index([setoran_id])
+  @@map("reward_transaksi")
+}
+
+model MutasiPoint {
+  mutasi_id           BigInt              @id @default(autoincrement())
+  user_id             BigInt
+  user                User                @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  jenis_mutasi        JenisMutasiType
+  referensi_tabel     String?             @db.VarChar(64)
+  referensi_id        BigInt?
+  poin                Int
+  poin_sebelum        Int                 @default(0)
+  poin_sesudah        Int                 @default(0)
+  keterangan          String?             @db.VarChar(255)
+  created_at          DateTime            @default(now()) @db.Timestamptz()
+
+  @@index([user_id])
+  @@index([created_at])
+  @@map("mutasi_point")
+}

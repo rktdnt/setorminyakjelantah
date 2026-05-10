@@ -1,4 +1,4 @@
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -18,99 +18,20 @@ function readAuthUser(req) {
   }
 }
 
-async function getSetoranIdColumn() {
-  const [columns] = await db.execute(
-    `SELECT COLUMN_NAME
-     FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE table_schema = current_schema()
-       AND TABLE_NAME = 'setoran_minyak'
-       AND COLUMN_NAME IN ('setoran_id', 'id_setoran', 'id')
-     ORDER BY CASE COLUMN_NAME
-       WHEN 'setoran_id' THEN 1
-       WHEN 'id_setoran' THEN 2
-       WHEN 'id' THEN 3
-       ELSE 99 END
-     LIMIT 1`
-  );
-
-  return columns[0]?.COLUMN_NAME || null;
-}
-
-async function getUserPointColumn() {
-  const [columns] = await db.execute(
-    `SELECT COLUMN_NAME
-     FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE table_schema = current_schema()
-       AND TABLE_NAME = 'users'
-       AND COLUMN_NAME IN ('poin', 'points', 'total_poin', 'jumlah_poin', 'poin_user')
-     ORDER BY CASE COLUMN_NAME
-       WHEN 'poin' THEN 1
-       WHEN 'points' THEN 2
-       WHEN 'total_poin' THEN 3
-       WHEN 'jumlah_poin' THEN 4
-       WHEN 'poin_user' THEN 5
-       ELSE 99 END
-     LIMIT 1`
-  );
-
-  return columns[0]?.COLUMN_NAME || null;
-}
-
 async function pickRewardRule(liter) {
-  const [ruleRows] = await db.execute(
-    `SELECT rule_id, minimal_liter, poin_per_liter, bonus_poin
-     FROM reward_rule
-     WHERE aktif = 1
-       AND minimal_liter <= ?
-     ORDER BY minimal_liter DESC
-     LIMIT 1`,
-    [liter]
-  );
+  const rule = await prisma.rewardRule.findFirst({
+    where: {
+      aktif: true,
+      minimal_liter: {
+        lte: liter,
+      },
+    },
+    orderBy: {
+      minimal_liter: 'desc',
+    },
+  });
 
-  return ruleRows[0] || null;
-}
-
-async function syncSaldoPoint(userId, pointColumn) {
-  if (!pointColumn) {
-    return;
-  }
-
-  await db.execute(
-    `INSERT INTO saldo_poin (user_id, total_poin)
-     VALUES (
-       ?,
-       (SELECT COALESCE(${pointColumn}, 0) FROM users WHERE user_id = ?)
-     )
-     ON CONFLICT (user_id) DO UPDATE
-       SET total_poin = EXCLUDED.total_poin,
-           updated_at = CURRENT_TIMESTAMP`,
-    [userId, userId]
-  );
-}
-
-async function writePointMutation({ userId, delta, before, after, refId, note }) {
-  if (!delta) {
-    return;
-  }
-
-  await db.execute(
-    `INSERT INTO mutasi_point
-      (user_id, jenis_mutasi, referensi_tabel, referensi_id, poin, poin_sebelum, poin_sesudah, keterangan)
-     VALUES (?, ?, 'setoran_minyak', ?, ?, ?, ?, ?)`,
-    [userId, delta > 0 ? 'credit' : 'debit', refId, delta, before, after, note]
-  );
-}
-
-async function writeRewardTransaksi({ userId, delta, ruleId, setoranId, note }) {
-  if (!delta) {
-    return;
-  }
-
-  await db.execute(
-    `INSERT INTO reward_transaksi (user_id, rule_id, setoran_id, jenis_reward, poin, deskripsi)
-     VALUES (?, ?, ?, 'setoran', ?, ?)`,
-    [userId, ruleId, setoranId, delta, note]
-  );
+  return rule || null;
 }
 
 export async function PATCH(req) {
@@ -127,103 +48,93 @@ export async function PATCH(req) {
     return NextResponse.json({ success: false, message: 'Permintaan tidak valid.' }, { status: 400 });
   }
 
-  const setoranIdColumn = await getSetoranIdColumn();
-  const userPointColumn = await getUserPointColumn();
-
-  if (!setoranIdColumn) {
-    return NextResponse.json(
-      { success: false, message: 'Kolom ID setoran tidak ditemukan.' },
-      { status: 500 }
-    );
-  }
-
   const nextStatus = normalizedAction === 'approve' ? 'approved' : 'rejected';
 
-  await db.beginTransaction();
-
   try {
-    const [setoranRows] = await db.execute(
-      `SELECT user_id, jumlah_liter, status_verifikasi, poin_didapat, rule_id
-       FROM setoran_minyak
-       WHERE ${setoranIdColumn}=?
-       FOR UPDATE`,
-      [setoranId]
-    );
+    const result = await prisma.$transaction(async (tx) => {
+      // Get the setoran with lock
+      const currentSetoran = await tx.setoranMinyak.findUnique({
+        where: { setoran_id: setoranId },
+      });
 
-    const currentSetoran = setoranRows[0];
+      if (!currentSetoran) {
+        throw new Error('SETORAN_NOT_FOUND');
+      }
 
-    if (!currentSetoran) {
-      await db.rollback();
-      return NextResponse.json({ success: false, message: 'Data setoran tidak ditemukan.' }, { status: 404 });
-    }
+      const previousStatus = currentSetoran.status_verifikasi;
+      const liter = parseFloat(currentSetoran.jumlah_liter);
 
-    const previousStatus = String(currentSetoran.status_verifikasi || '').toLowerCase();
-    const liter = Number(currentSetoran.jumlah_liter || 0);
+      // Get user's current points
+      const user = await tx.user.findUnique({
+        where: { user_id: currentSetoran.user_id },
+      });
 
-    const [userRows] = await db.execute(
-      `SELECT COALESCE(${userPointColumn || '0'}, 0) AS currentPoint
-       FROM users
-       WHERE user_id = ?
-       FOR UPDATE`,
-      [currentSetoran.user_id]
-    );
+      const currentPoint = user?.poin || 0;
 
-    const currentPoint = Number(userRows[0]?.currentPoint || 0);
+      // Pick reward rule if approving
+      const matchedRule = nextStatus === 'approved' ? await pickRewardRule(liter) : null;
+      const computedPoints = matchedRule
+        ? Math.max(
+            0,
+            Math.round(liter * (matchedRule.poin_per_liter || POINTS_PER_LITER) + (matchedRule.bonus_poin || 0))
+          )
+        : Math.max(0, Math.round(liter * POINTS_PER_LITER));
 
-    const matchedRule = nextStatus === 'approved' ? await pickRewardRule(liter) : null;
-    const computedPoints = matchedRule
-      ? Math.max(0, Math.round(liter * Number(matchedRule.poin_per_liter || POINTS_PER_LITER) + Number(matchedRule.bonus_poin || 0)))
-      : Math.max(0, Math.round(liter * POINTS_PER_LITER));
+      // Update setoran status
+      if (previousStatus !== nextStatus) {
+        await tx.setoranMinyak.update({
+          where: { setoran_id: setoranId },
+          data: {
+            status_verifikasi: nextStatus,
+            verified_at: new Date(),
+            verified_by: authUser.user_id,
+            poin_didapat: nextStatus === 'approved' ? computedPoints : 0,
+            rule_id: nextStatus === 'approved' ? matchedRule?.rule_id || null : null,
+          },
+        });
+      }
 
-    if (previousStatus !== nextStatus) {
-      await db.execute(
-        `UPDATE setoran_minyak
-         SET status_verifikasi=?,
-             verified_at = CURRENT_TIMESTAMP,
-             verified_by = ?,
-             poin_didapat = ?,
-             rule_id = ?
-         WHERE ${setoranIdColumn}=?`,
-        [
-          nextStatus,
-          authUser.user_id,
-          nextStatus === 'approved' ? computedPoints : 0,
-          nextStatus === 'approved' ? matchedRule?.rule_id || null : null,
-          setoranId,
-        ]
-      );
-    }
+      let pointsDelta = 0;
 
-    let pointsDelta = 0;
-
-    if (userPointColumn) {
-      const previousAward = Number(currentSetoran.poin_didapat || 0) || Math.max(0, Math.round(liter * POINTS_PER_LITER));
+      const previousAward = currentSetoran.poin_didapat || Math.max(0, Math.round(liter * POINTS_PER_LITER));
 
       if (previousStatus !== 'approved' && nextStatus === 'approved') {
         pointsDelta = computedPoints;
 
-        await db.execute(
-          `UPDATE users
-           SET ${userPointColumn} = COALESCE(${userPointColumn}, 0) + ?
-           WHERE user_id = ?`,
-          [computedPoints, currentSetoran.user_id]
-        );
-
-        await writeRewardTransaksi({
-          userId: currentSetoran.user_id,
-          delta: computedPoints,
-          ruleId: matchedRule?.rule_id || null,
-          setoranId,
-          note: `Reward verifikasi setoran #${setoranId}`,
+        // Update user points
+        await tx.user.update({
+          where: { user_id: currentSetoran.user_id },
+          data: {
+            poin: {
+              increment: computedPoints,
+            },
+          },
         });
 
-        await writePointMutation({
-          userId: currentSetoran.user_id,
-          delta: computedPoints,
-          before: currentPoint,
-          after: currentPoint + computedPoints,
-          refId: setoranId,
-          note: `Credit poin dari verifikasi setoran #${setoranId}`,
+        // Create reward transaction
+        await tx.rewardTransaksi.create({
+          data: {
+            user_id: currentSetoran.user_id,
+            rule_id: matchedRule?.rule_id || null,
+            setoran_id: setoranId,
+            jenis_reward: 'setoran',
+            poin: computedPoints,
+            deskripsi: `Reward verifikasi setoran #${setoranId}`,
+          },
+        });
+
+        // Create point mutation
+        await tx.mutasiPoint.create({
+          data: {
+            user_id: currentSetoran.user_id,
+            jenis_mutasi: 'credit',
+            referensi_tabel: 'setoran_minyak',
+            referensi_id: setoranId,
+            poin: computedPoints,
+            poin_sebelum: currentPoint,
+            poin_sesudah: currentPoint + computedPoints,
+            keterangan: `Credit poin dari verifikasi setoran #${setoranId}`,
+          },
         });
       }
 
@@ -231,44 +142,70 @@ export async function PATCH(req) {
         pointsDelta = -previousAward;
         const safeDeduction = Math.max(0, previousAward);
 
-        await db.execute(
-          `UPDATE users
-           SET ${userPointColumn} = GREATEST(0, COALESCE(${userPointColumn}, 0) - ?)
-           WHERE user_id = ?`,
-          [safeDeduction, currentSetoran.user_id]
-        );
-
-        await writeRewardTransaksi({
-          userId: currentSetoran.user_id,
-          delta: -safeDeduction,
-          ruleId: currentSetoran.rule_id || null,
-          setoranId,
-          note: `Reversal poin karena perubahan status setoran #${setoranId}`,
+        // Update user points (deduct)
+        await tx.user.update({
+          where: { user_id: currentSetoran.user_id },
+          data: {
+            poin: {
+              increment: -safeDeduction,
+            },
+          },
         });
 
-        await writePointMutation({
-          userId: currentSetoran.user_id,
-          delta: -safeDeduction,
-          before: currentPoint,
-          after: Math.max(0, currentPoint - safeDeduction),
-          refId: setoranId,
-          note: `Debit poin dari pembatalan approve setoran #${setoranId}`,
+        // Create reward transaction (reversal)
+        await tx.rewardTransaksi.create({
+          data: {
+            user_id: currentSetoran.user_id,
+            rule_id: currentSetoran.rule_id || null,
+            setoran_id: setoranId,
+            jenis_reward: 'penyesuaian',
+            poin: -safeDeduction,
+            deskripsi: `Reversal poin karena perubahan status setoran #${setoranId}`,
+          },
+        });
+
+        // Create point mutation (debit)
+        await tx.mutasiPoint.create({
+          data: {
+            user_id: currentSetoran.user_id,
+            jenis_mutasi: 'debit',
+            referensi_tabel: 'setoran_minyak',
+            referensi_id: setoranId,
+            poin: safeDeduction,
+            poin_sebelum: currentPoint,
+            poin_sesudah: Math.max(0, currentPoint - safeDeduction),
+            keterangan: `Debit poin dari pembatalan approve setoran #${setoranId}`,
+          },
         });
       }
 
-      await syncSaldoPoint(currentSetoran.user_id, userPointColumn);
-    }
+      // Update saldo poin
+      await tx.saldoPoin.upsert({
+        where: { user_id: currentSetoran.user_id },
+        update: {
+          total_poin: currentPoint + pointsDelta,
+          updated_at: new Date(),
+        },
+        create: {
+          user_id: currentSetoran.user_id,
+          total_poin: currentPoint + pointsDelta,
+        },
+      });
 
-    await db.commit();
+      return { pointsDelta };
+    });
 
     return NextResponse.json({
       success: true,
       status: nextStatus,
-      pointsDelta,
-      pointsApplied: userPointColumn !== null,
+      pointsDelta: result.pointsDelta,
+      pointsApplied: true,
     });
-  } catch {
-    await db.rollback();
+  } catch (error) {
+    if (error.message === 'SETORAN_NOT_FOUND') {
+      return NextResponse.json({ success: false, message: 'Data setoran tidak ditemukan.' }, { status: 404 });
+    }
+    console.error('Setoran approval error:', error);
     return NextResponse.json({ success: false, message: 'Gagal memproses verifikasi setoran.' }, { status: 500 });
   }
 }

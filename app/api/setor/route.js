@@ -1,13 +1,22 @@
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 
 export async function POST(req) {
-  const { user_id, liter } = await req.json();
+  try {
+    const { user_id, liter } = await req.json();
 
-  await db.execute(
-    "INSERT INTO setoran_minyak (user_id, tanggal_setor, jumlah_liter, status_verifikasi) VALUES (?,NOW(),?,'pending')",
-    [user_id, liter]
-  );
+    await prisma.setoranMinyak.create({
+      data: {
+        user_id,
+        tanggal_setor: new Date(),
+        jumlah_liter: liter,
+        status_verifikasi: 'pending',
+      },
+    });
 
-  return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Setor error:', error);
+    return NextResponse.json({ success: false, message: 'Gagal membuat setoran.' }, { status: 500 });
+  }
 }

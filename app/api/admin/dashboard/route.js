@@ -1,4 +1,4 @@
-import { db } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -17,24 +17,6 @@ function readAuthUser(req) {
   }
 }
 
-async function getSetoranIdColumn() {
-  const [columns] = await db.execute(
-    `SELECT COLUMN_NAME
-     FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE table_schema = current_schema()
-       AND TABLE_NAME = 'setoran_minyak'
-       AND COLUMN_NAME IN ('setoran_id', 'id_setoran', 'id')
-     ORDER BY CASE COLUMN_NAME
-       WHEN 'setoran_id' THEN 1
-       WHEN 'id_setoran' THEN 2
-       WHEN 'id' THEN 3
-       ELSE 99 END
-     LIMIT 1`
-  );
-
-  return columns[0]?.COLUMN_NAME || null;
-}
-
 export async function GET(req) {
   const authUser = readAuthUser(req);
 
@@ -43,42 +25,53 @@ export async function GET(req) {
   }
 
   try {
-    const setoranIdColumn = await getSetoranIdColumn();
-    const [[usersRow]] = await db.execute('SELECT COUNT(*) AS totalUsers FROM users');
-    const [[pendingRow]] = await db.execute(
-      "SELECT COUNT(*) AS pendingSetoran FROM setoran_minyak WHERE status_verifikasi='pending'"
-    );
-    const [[literRow]] = await db.execute(
-      'SELECT COALESCE(SUM(jumlah_liter), 0) AS totalLiter FROM setoran_minyak'
-    );
+    const [totalUsers, pendingSetoran, totalLiterResult, recentSetoran] = await Promise.all([
+      prisma.user.count(),
+      prisma.setoranMinyak.count({
+        where: { status_verifikasi: 'pending' },
+      }),
+      prisma.setoranMinyak.aggregate({
+        _sum: { jumlah_liter: true },
+      }),
+      prisma.setoranMinyak.findMany({
+        select: {
+          setoran_id: true,
+          user_id: true,
+          tanggal_setor: true,
+          jumlah_liter: true,
+          status_verifikasi: true,
+          user: {
+            select: {
+              nama: true,
+            },
+          },
+        },
+        orderBy: { tanggal_setor: 'desc' },
+        take: 8,
+      }),
+    ]);
 
-    const idSelect = setoranIdColumn ? `s.${setoranIdColumn} AS setoran_id,` : '';
-
-    const [recentRows] = await db.execute(
-      `SELECT 
-        ${idSelect}
-        s.user_id,
-        u.nama,
-        s.tanggal_setor,
-        s.jumlah_liter,
-        s.status_verifikasi
-      FROM setoran_minyak s
-      LEFT JOIN users u ON u.user_id = s.user_id
-      ORDER BY s.tanggal_setor DESC
-      LIMIT 8`
-    );
+    const totalLiter = totalLiterResult._sum.jumlah_liter || 0;
 
     return NextResponse.json({
       success: true,
       canModerate: authUser.role === 'admin',
       summary: {
-        totalUsers: Number(usersRow?.totalUsers || 0),
-        pendingSetoran: Number(pendingRow?.pendingSetoran || 0),
-        totalLiter: Number(literRow?.totalLiter || 0),
+        totalUsers,
+        pendingSetoran,
+        totalLiter: parseFloat(totalLiter.toString()),
       },
-      recent: recentRows,
+      recent: recentSetoran.map(item => ({
+        setoran_id: item.setoran_id,
+        user_id: item.user_id,
+        nama: item.user?.nama,
+        tanggal_setor: item.tanggal_setor,
+        jumlah_liter: parseFloat(item.jumlah_liter.toString()),
+        status_verifikasi: item.status_verifikasi,
+      })),
     });
-  } catch {
+  } catch (error) {
+    console.error('Dashboard error:', error);
     return NextResponse.json(
       {
         success: false,
