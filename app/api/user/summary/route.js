@@ -136,7 +136,7 @@ export async function GET(req) {
     return NextResponse.json({
       success: true,
       user: {
-        user_id: user.user_id,
+        user_id: Number(user.user_id),
         nama: user.nama,
         email: user.email,
         status_akun: user.status_akun,

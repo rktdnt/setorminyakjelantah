@@ -62,8 +62,8 @@ export async function GET(req) {
         totalLiter: parseFloat(totalLiter.toString()),
       },
       recent: recentSetoran.map(item => ({
-        setoran_id: item.setoran_id,
-        user_id: item.user_id,
+        setoran_id: Number(item.setoran_id),
+        user_id: Number(item.user_id),
         nama: item.user?.nama,
         tanggal_setor: item.tanggal_setor,
         jumlah_liter: parseFloat(item.jumlah_liter.toString()),

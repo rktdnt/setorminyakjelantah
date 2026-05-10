@@ -48,7 +48,7 @@ export async function GET(req) {
     });
 
     const formattedItems = items.map(item => ({
-      penukaran_id: item.penukaran_id,
+      penukaran_id: Number(item.penukaran_id),
       jumlah: item.jumlah,
       total_poin_dipakai: item.total_poin_dipakai,
       status_penukaran: item.status_penukaran,

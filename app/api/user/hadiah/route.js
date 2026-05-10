@@ -61,7 +61,14 @@ export async function GET(req) {
     return NextResponse.json({
       success: true,
       poin: userPoin,
-      hadiah: hadiahs,
+      hadiah: hadiahs.map(h => ({
+        hadiah_id: Number(h.hadiah_id),
+        nama_hadiah: h.nama_hadiah,
+        deskripsi: h.deskripsi,
+        poin_dibutuhkan: h.poin_dibutuhkan,
+        stok: h.stok,
+        status_hadiah: h.status_hadiah,
+      })),
     });
   } catch (error) {
     console.error('Hadiah error:', error);
