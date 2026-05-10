@@ -21,7 +21,7 @@ async function getSetoranIdColumn() {
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE()
+     WHERE table_schema = current_schema()
        AND TABLE_NAME = 'setoran_minyak'
        AND COLUMN_NAME IN ('setoran_id', 'id_setoran', 'id')
      ORDER BY CASE COLUMN_NAME

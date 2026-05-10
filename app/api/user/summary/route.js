@@ -21,7 +21,7 @@ async function getUserPointColumn() {
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE()
+     WHERE table_schema = current_schema()
        AND TABLE_NAME = 'users'
        AND COLUMN_NAME IN ('poin', 'points', 'total_poin', 'jumlah_poin', 'poin_user')
      ORDER BY CASE COLUMN_NAME

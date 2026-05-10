@@ -22,7 +22,7 @@ async function getSetoranIdColumn() {
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE()
+     WHERE table_schema = current_schema()
        AND TABLE_NAME = 'setoran_minyak'
        AND COLUMN_NAME IN ('setoran_id', 'id_setoran', 'id')
      ORDER BY CASE COLUMN_NAME
@@ -40,7 +40,7 @@ async function getUserPointColumn() {
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE()
+     WHERE table_schema = current_schema()
        AND TABLE_NAME = 'users'
        AND COLUMN_NAME IN ('poin', 'points', 'total_poin', 'jumlah_poin', 'poin_user')
      ORDER BY CASE COLUMN_NAME
@@ -81,9 +81,9 @@ async function syncSaldoPoint(userId, pointColumn) {
        ?,
        (SELECT COALESCE(${pointColumn}, 0) FROM users WHERE user_id = ?)
      )
-     ON DUPLICATE KEY UPDATE
-       total_poin = VALUES(total_poin),
-       updated_at = CURRENT_TIMESTAMP`,
+     ON CONFLICT (user_id) DO UPDATE
+       SET total_poin = EXCLUDED.total_poin,
+           updated_at = CURRENT_TIMESTAMP`,
     [userId, userId]
   );
 }
@@ -146,7 +146,6 @@ export async function PATCH(req) {
       `SELECT user_id, jumlah_liter, status_verifikasi, poin_didapat, rule_id
        FROM setoran_minyak
        WHERE ${setoranIdColumn}=?
-       LIMIT 1
        FOR UPDATE`,
       [setoranId]
     );
@@ -165,7 +164,6 @@ export async function PATCH(req) {
       `SELECT COALESCE(${userPointColumn || '0'}, 0) AS currentPoint
        FROM users
        WHERE user_id = ?
-       LIMIT 1
        FOR UPDATE`,
       [currentSetoran.user_id]
     );

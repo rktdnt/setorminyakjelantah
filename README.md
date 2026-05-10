@@ -17,19 +17,20 @@ Gunakan file migrasi ini:
 
 - [database/db_minyak_migration.sql](database/db_minyak_migration.sql)
 
-Cara pakai (contoh MySQL CLI):
+Cara pakai di Supabase SQL Editor:
 
-```bash
-mysql -u root -p < database/db_minyak_migration.sql
-```
+1. Buka project Supabase.
+2. Buka SQL Editor.
+3. Jalankan file migrasi tersebut.
+
+Lalu set environment variable aplikasi ke connection string Postgres Supabase, misalnya `SUPABASE_DB_URL` atau `DATABASE_URL`.
 
 File migrasi akan:
 
-1. Membuat database `db_minyak` jika belum ada.
-2. Menyusun ulang tabel inti menjadi `users`, `petugas`, `cabang`, `setoran_minyak`, `reward_rule`, `saldo_poin`, `hadiah`, `penukaran_reward`, `reward_transaksi`, `mutasi_point`.
-3. Menyesuaikan tabel `setoran_minyak` agar punya kolom status verifikasi, poin setoran, timestamp, dan index.
-4. Normalisasi nilai status verifikasi ke: `pending`, `approved`, `rejected`.
-5. Seed akun petugas awal:
+1. Menyusun ulang tabel inti menjadi `users`, `petugas`, `cabang`, `setoran_minyak`, `reward_rule`, `saldo_poin`, `hadiah`, `penukaran_reward`, `reward_transaksi`, `mutasi_point`.
+2. Menyesuaikan tabel `setoran_minyak` agar punya kolom status verifikasi, poin setoran, timestamp, dan index.
+3. Menyediakan trigger `updated_at` untuk tabel yang membutuhkannya.
+4. Seed akun petugas awal:
    - email: `admin@setorminyak.local`
    - password: `admin123`
 

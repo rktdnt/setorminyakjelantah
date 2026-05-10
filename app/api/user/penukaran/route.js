@@ -21,7 +21,7 @@ async function getUserPointColumn() {
   const [columns] = await db.execute(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE()
+     WHERE table_schema = current_schema()
        AND TABLE_NAME = 'users'
        AND COLUMN_NAME IN ('poin', 'points', 'total_poin', 'jumlah_poin', 'poin_user')
      ORDER BY CASE COLUMN_NAME
@@ -48,9 +48,9 @@ async function syncSaldoPoint(userId, pointColumn) {
        ?,
        (SELECT COALESCE(${pointColumn}, 0) FROM users WHERE user_id = ?)
      )
-     ON DUPLICATE KEY UPDATE
-       total_poin = VALUES(total_poin),
-       updated_at = CURRENT_TIMESTAMP`,
+     ON CONFLICT (user_id) DO UPDATE
+       SET total_poin = EXCLUDED.total_poin,
+           updated_at = CURRENT_TIMESTAMP`,
     [userId, userId]
   );
 }
@@ -116,7 +116,6 @@ export async function POST(req) {
       `SELECT hadiah_id, nama_hadiah, poin_dibutuhkan, stok, status_hadiah
        FROM hadiah
        WHERE hadiah_id = ?
-       LIMIT 1
        FOR UPDATE`,
       [hadiahId]
     );
@@ -135,7 +134,6 @@ export async function POST(req) {
       `SELECT COALESCE(${pointColumn}, 0) AS poin
        FROM users
        WHERE user_id = ?
-       LIMIT 1
        FOR UPDATE`,
       [authUser.user_id]
     );
@@ -165,11 +163,12 @@ export async function POST(req) {
     const [insertPenukaran] = await db.execute(
       `INSERT INTO penukaran_reward
         (user_id, hadiah_id, jumlah, total_poin_dipakai, status_penukaran, requested_at, processed_at, processed_by)
-       VALUES (?, ?, ?, ?, 'done', NOW(), NOW(), NULL)`,
+       VALUES (?, ?, ?, ?, 'done', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
+       RETURNING penukaran_id`,
       [authUser.user_id, hadiahId, jumlah, totalPoinDipakai]
     );
 
-    const penukaranId = insertPenukaran.insertId;
+    const penukaranId = insertPenukaran[0]?.penukaran_id;
     const pointAfter = Math.max(0, pointBefore - totalPoinDipakai);
 
     await db.execute(

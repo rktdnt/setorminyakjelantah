@@ -1,251 +1,259 @@
 -- db_minyak_migration.sql
--- Target: MySQL / MariaDB
--- Purpose: Revamp DB schema to match app + requested ERD style
+-- Target: Supabase / PostgreSQL
+-- Purpose: Schema migration for the oil collection app.
 
-CREATE DATABASE IF NOT EXISTS db_minyak;
-USE db_minyak;
+create extension if not exists pgcrypto;
 
--- MASTER: CABANG
-CREATE TABLE IF NOT EXISTS cabang (
-  cabang_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  kode_cabang VARCHAR(30) NOT NULL,
-  nama_cabang VARCHAR(120) NOT NULL,
-  alamat TEXT NULL,
-  aktif TINYINT(1) NOT NULL DEFAULT 1,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (cabang_id),
-  UNIQUE KEY uq_kode_cabang (kode_cabang)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+do $$ begin
+  create type status_akun_type as enum ('aktif', 'nonaktif', 'petugas', 'admin');
+exception when duplicate_object then null;
+end $$;
 
--- USERS (replaces legacy table user)
-CREATE TABLE IF NOT EXISTS users (
-  user_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  cabang_id INT UNSIGNED NULL,
-  nama VARCHAR(120) NOT NULL,
-  email VARCHAR(190) NOT NULL,
-  password VARCHAR(255) NOT NULL,
-  status_akun ENUM('aktif', 'nonaktif', 'petugas', 'admin') NOT NULL DEFAULT 'aktif',
-  poin INT UNSIGNED NOT NULL DEFAULT 0,
-  tanggal_daftar DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id),
-  UNIQUE KEY uq_users_email (email),
-  KEY idx_users_cabang (cabang_id),
-  CONSTRAINT fk_users_cabang FOREIGN KEY (cabang_id) REFERENCES cabang(cabang_id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+do $$ begin
+  create type status_petugas_type as enum ('aktif', 'nonaktif');
+exception when duplicate_object then null;
+end $$;
 
--- Keep migration friendly if old table exists
-CREATE TABLE IF NOT EXISTS `user` (
-  user_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  nama VARCHAR(120) NOT NULL,
-  email VARCHAR(190) NOT NULL,
-  password VARCHAR(255) NOT NULL,
-  status_akun ENUM('aktif', 'nonaktif', 'petugas', 'admin') NOT NULL DEFAULT 'aktif',
-  poin INT UNSIGNED NOT NULL DEFAULT 0,
-  tanggal_daftar DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id),
-  UNIQUE KEY uq_user_email (email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+do $$ begin
+  create type status_verifikasi_type as enum ('pending', 'approved', 'rejected');
+exception when duplicate_object then null;
+end $$;
 
--- Backfill users from legacy user table
-INSERT INTO users (user_id, nama, email, password, status_akun, poin, tanggal_daftar)
-SELECT u.user_id, u.nama, u.email, u.password, COALESCE(u.status_akun, 'aktif'), COALESCE(u.poin, 0), COALESCE(u.tanggal_daftar, NOW())
-FROM `user` u
-LEFT JOIN users nu ON nu.user_id = u.user_id
-WHERE nu.user_id IS NULL;
+do $$ begin
+  create type status_hadiah_type as enum ('aktif', 'nonaktif');
+exception when duplicate_object then null;
+end $$;
 
--- PETUGAS PROFILE
-CREATE TABLE IF NOT EXISTS petugas (
-  petugas_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED NOT NULL,
-  cabang_id INT UNSIGNED NULL,
-  jabatan VARCHAR(100) NULL,
-  status_petugas ENUM('aktif', 'nonaktif') NOT NULL DEFAULT 'aktif',
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (petugas_id),
-  UNIQUE KEY uq_petugas_user (user_id),
-  KEY idx_petugas_cabang (cabang_id),
-  CONSTRAINT fk_petugas_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-  CONSTRAINT fk_petugas_cabang FOREIGN KEY (cabang_id) REFERENCES cabang(cabang_id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+do $$ begin
+  create type status_penukaran_type as enum ('pending', 'approved', 'rejected', 'done');
+exception when duplicate_object then null;
+end $$;
 
--- REWARD RULES
-CREATE TABLE IF NOT EXISTS reward_rule (
-  rule_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  nama_rule VARCHAR(120) NOT NULL,
-  minimal_liter DECIMAL(10,2) NOT NULL DEFAULT 0,
-  poin_per_liter INT UNSIGNED NOT NULL DEFAULT 10,
-  bonus_poin INT UNSIGNED NOT NULL DEFAULT 0,
-  aktif TINYINT(1) NOT NULL DEFAULT 1,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (rule_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+do $$ begin
+  create type jenis_reward_type as enum ('setoran', 'bonus', 'penyesuaian');
+exception when duplicate_object then null;
+end $$;
 
-INSERT INTO reward_rule (nama_rule, minimal_liter, poin_per_liter, bonus_poin, aktif)
-SELECT 'Default Rule', 0, 10, 0, 1
-WHERE NOT EXISTS (SELECT 1 FROM reward_rule WHERE nama_rule = 'Default Rule');
+do $$ begin
+  create type jenis_mutasi_type as enum ('credit', 'debit');
+exception when duplicate_object then null;
+end $$;
 
--- SETORAN
-CREATE TABLE IF NOT EXISTS setoran_minyak (
-  setoran_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED NOT NULL,
-  petugas_id INT UNSIGNED NULL,
-  cabang_id INT UNSIGNED NULL,
-  rule_id INT UNSIGNED NULL,
-  tanggal_setor DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  jumlah_liter DECIMAL(10,2) NOT NULL,
-  poin_didapat INT UNSIGNED NOT NULL DEFAULT 0,
-  status_verifikasi ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
-  verified_at DATETIME NULL,
-  verified_by INT UNSIGNED NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (setoran_id),
-  KEY idx_setoran_user (user_id),
-  KEY idx_setoran_petugas (petugas_id),
-  KEY idx_setoran_cabang (cabang_id),
-  KEY idx_setoran_status (status_verifikasi),
-  KEY idx_setoran_tanggal (tanggal_setor),
-  CONSTRAINT fk_setoran_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-  CONSTRAINT fk_setoran_petugas FOREIGN KEY (petugas_id) REFERENCES petugas(petugas_id) ON DELETE SET NULL,
-  CONSTRAINT fk_setoran_cabang FOREIGN KEY (cabang_id) REFERENCES cabang(cabang_id) ON DELETE SET NULL,
-  CONSTRAINT fk_setoran_rule FOREIGN KEY (rule_id) REFERENCES reward_rule(rule_id) ON DELETE SET NULL,
-  CONSTRAINT fk_setoran_verified_by FOREIGN KEY (verified_by) REFERENCES users(user_id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+create or replace function set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = current_timestamp;
+  return new;
+end;
+$$;
 
-ALTER TABLE setoran_minyak
-  ADD COLUMN IF NOT EXISTS petugas_id INT UNSIGNED NULL,
-  ADD COLUMN IF NOT EXISTS cabang_id INT UNSIGNED NULL,
-  ADD COLUMN IF NOT EXISTS rule_id INT UNSIGNED NULL,
-  ADD COLUMN IF NOT EXISTS poin_didapat INT UNSIGNED NOT NULL DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS verified_at DATETIME NULL,
-  ADD COLUMN IF NOT EXISTS verified_by INT UNSIGNED NULL,
-  ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  ADD COLUMN IF NOT EXISTS updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+create table if not exists cabang (
+  cabang_id bigint generated by default as identity primary key,
+  kode_cabang varchar(30) not null unique,
+  nama_cabang varchar(120) not null,
+  alamat text,
+  aktif boolean not null default true,
+  created_at timestamptz not null default current_timestamp,
+  updated_at timestamptz not null default current_timestamp
+);
 
--- SALDO POIN SNAPSHOT
-CREATE TABLE IF NOT EXISTS saldo_poin (
-  saldo_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED NOT NULL,
-  total_poin INT UNSIGNED NOT NULL DEFAULT 0,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (saldo_id),
-  UNIQUE KEY uq_saldo_user (user_id),
-  CONSTRAINT fk_saldo_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+drop trigger if exists trg_cabang_updated_at on cabang;
+create trigger trg_cabang_updated_at
+before update on cabang
+for each row execute function set_updated_at();
 
-INSERT INTO saldo_poin (user_id, total_poin)
-SELECT u.user_id, u.poin
-FROM users u
-LEFT JOIN saldo_poin sp ON sp.user_id = u.user_id
-WHERE sp.user_id IS NULL;
+create table if not exists users (
+  user_id bigint generated by default as identity primary key,
+  cabang_id bigint references cabang(cabang_id) on delete set null,
+  nama varchar(120) not null,
+  email varchar(190) not null unique,
+  password varchar(255) not null,
+  status_akun status_akun_type not null default 'aktif',
+  poin integer not null default 0,
+  tanggal_daftar timestamptz not null default current_timestamp,
+  created_at timestamptz not null default current_timestamp,
+  updated_at timestamptz not null default current_timestamp
+);
 
-UPDATE saldo_poin sp
-JOIN users u ON u.user_id = sp.user_id
-SET sp.total_poin = COALESCE(u.poin, 0);
+drop trigger if exists trg_users_updated_at on users;
+create trigger trg_users_updated_at
+before update on users
+for each row execute function set_updated_at();
 
--- HADIAH
-CREATE TABLE IF NOT EXISTS hadiah (
-  hadiah_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  nama_hadiah VARCHAR(140) NOT NULL,
-  deskripsi TEXT NULL,
-  poin_dibutuhkan INT UNSIGNED NOT NULL,
-  stok INT UNSIGNED NOT NULL DEFAULT 0,
-  status_hadiah ENUM('aktif', 'nonaktif') NOT NULL DEFAULT 'aktif',
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (hadiah_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+create table if not exists petugas (
+  petugas_id bigint generated by default as identity primary key,
+  user_id bigint not null unique references users(user_id) on delete cascade,
+  cabang_id bigint references cabang(cabang_id) on delete set null,
+  jabatan varchar(100),
+  status_petugas status_petugas_type not null default 'aktif',
+  created_at timestamptz not null default current_timestamp,
+  updated_at timestamptz not null default current_timestamp
+);
 
--- PENUKARAN REWARD
-CREATE TABLE IF NOT EXISTS penukaran_reward (
-  penukaran_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED NOT NULL,
-  hadiah_id INT UNSIGNED NOT NULL,
-  jumlah INT UNSIGNED NOT NULL DEFAULT 1,
-  total_poin_dipakai INT UNSIGNED NOT NULL DEFAULT 0,
-  status_penukaran ENUM('pending', 'approved', 'rejected', 'done') NOT NULL DEFAULT 'pending',
-  requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  processed_at DATETIME NULL,
-  processed_by INT UNSIGNED NULL,
-  catatan TEXT NULL,
-  PRIMARY KEY (penukaran_id),
-  KEY idx_penukaran_user (user_id),
-  KEY idx_penukaran_hadiah (hadiah_id),
-  KEY idx_penukaran_status (status_penukaran),
-  CONSTRAINT fk_penukaran_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-  CONSTRAINT fk_penukaran_hadiah FOREIGN KEY (hadiah_id) REFERENCES hadiah(hadiah_id) ON DELETE RESTRICT,
-  CONSTRAINT fk_penukaran_petugas FOREIGN KEY (processed_by) REFERENCES users(user_id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+drop trigger if exists trg_petugas_updated_at on petugas;
+create trigger trg_petugas_updated_at
+before update on petugas
+for each row execute function set_updated_at();
 
--- REWARD TRANSAKSI
-CREATE TABLE IF NOT EXISTS reward_transaksi (
-  reward_transaksi_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED NOT NULL,
-  rule_id INT UNSIGNED NULL,
-  setoran_id BIGINT UNSIGNED NULL,
-  jenis_reward ENUM('setoran', 'bonus', 'penyesuaian') NOT NULL DEFAULT 'setoran',
-  poin INT NOT NULL,
-  deskripsi VARCHAR(255) NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (reward_transaksi_id),
-  KEY idx_reward_user (user_id),
-  KEY idx_reward_rule (rule_id),
-  KEY idx_reward_setoran (setoran_id),
-  CONSTRAINT fk_reward_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-  CONSTRAINT fk_reward_rule FOREIGN KEY (rule_id) REFERENCES reward_rule(rule_id) ON DELETE SET NULL,
-  CONSTRAINT fk_reward_setoran FOREIGN KEY (setoran_id) REFERENCES setoran_minyak(setoran_id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+create table if not exists reward_rule (
+  rule_id bigint generated by default as identity primary key,
+  nama_rule varchar(120) not null,
+  minimal_liter numeric(10,2) not null default 0,
+  poin_per_liter integer not null default 10,
+  bonus_poin integer not null default 0,
+  aktif boolean not null default true,
+  created_at timestamptz not null default current_timestamp,
+  updated_at timestamptz not null default current_timestamp
+);
 
--- MUTASI POINT (ledger)
-CREATE TABLE IF NOT EXISTS mutasi_point (
-  mutasi_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED NOT NULL,
-  jenis_mutasi ENUM('credit', 'debit') NOT NULL,
-  referensi_tabel VARCHAR(64) NULL,
-  referensi_id BIGINT NULL,
-  poin INT NOT NULL,
-  poin_sebelum INT NOT NULL DEFAULT 0,
-  poin_sesudah INT NOT NULL DEFAULT 0,
-  keterangan VARCHAR(255) NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (mutasi_id),
-  KEY idx_mutasi_user (user_id),
-  KEY idx_mutasi_created (created_at),
-  CONSTRAINT fk_mutasi_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+drop trigger if exists trg_reward_rule_updated_at on reward_rule;
+create trigger trg_reward_rule_updated_at
+before update on reward_rule
+for each row execute function set_updated_at();
 
--- Normalize status values in existing rows
-UPDATE setoran_minyak
-SET status_verifikasi = 'approved'
-WHERE LOWER(status_verifikasi) IN ('approve', 'accepted', 'verified');
+create table if not exists setoran_minyak (
+  setoran_id bigint generated by default as identity primary key,
+  user_id bigint not null references users(user_id) on delete cascade,
+  petugas_id bigint references petugas(petugas_id) on delete set null,
+  cabang_id bigint references cabang(cabang_id) on delete set null,
+  rule_id bigint references reward_rule(rule_id) on delete set null,
+  tanggal_setor timestamptz not null default current_timestamp,
+  jumlah_liter numeric(10,2) not null,
+  poin_didapat integer not null default 0,
+  status_verifikasi status_verifikasi_type not null default 'pending',
+  verified_at timestamptz,
+  verified_by bigint references users(user_id) on delete set null,
+  created_at timestamptz not null default current_timestamp,
+  updated_at timestamptz not null default current_timestamp
+);
 
-UPDATE setoran_minyak
-SET status_verifikasi = 'rejected'
-WHERE LOWER(status_verifikasi) IN ('reject', 'ditolak');
+drop trigger if exists trg_setoran_minyak_updated_at on setoran_minyak;
+create trigger trg_setoran_minyak_updated_at
+before update on setoran_minyak
+for each row execute function set_updated_at();
 
-UPDATE setoran_minyak
-SET status_verifikasi = 'pending'
-WHERE LOWER(status_verifikasi) NOT IN ('pending', 'approved', 'rejected');
+create index if not exists idx_setoran_user on setoran_minyak (user_id);
+create index if not exists idx_setoran_petugas on setoran_minyak (petugas_id);
+create index if not exists idx_setoran_cabang on setoran_minyak (cabang_id);
+create index if not exists idx_setoran_status on setoran_minyak (status_verifikasi);
+create index if not exists idx_setoran_tanggal on setoran_minyak (tanggal_setor);
 
--- Seed cabang default
-INSERT INTO cabang (kode_cabang, nama_cabang, alamat)
-SELECT 'CBG-UTAMA', 'Cabang Utama', 'Belum diatur'
-WHERE NOT EXISTS (SELECT 1 FROM cabang WHERE kode_cabang = 'CBG-UTAMA');
+create table if not exists saldo_poin (
+  saldo_id bigint generated by default as identity primary key,
+  user_id bigint not null unique references users(user_id) on delete cascade,
+  total_poin integer not null default 0,
+  updated_at timestamptz not null default current_timestamp
+);
 
--- Seed first admin/petugas account
-INSERT INTO users (nama, email, password, status_akun, poin)
-SELECT 'Petugas Admin', 'admin@setorminyak.local', MD5('admin123'), 'petugas', 0
-WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'admin@setorminyak.local');
+drop trigger if exists trg_saldo_poin_updated_at on saldo_poin;
+create trigger trg_saldo_poin_updated_at
+before update on saldo_poin
+for each row execute function set_updated_at();
 
-INSERT INTO petugas (user_id, jabatan, status_petugas)
-SELECT u.user_id, 'Petugas Lapangan', 'aktif'
-FROM users u
-LEFT JOIN petugas p ON p.user_id = u.user_id
-WHERE u.email = 'admin@setorminyak.local'
-  AND p.petugas_id IS NULL;
+create table if not exists hadiah (
+  hadiah_id bigint generated by default as identity primary key,
+  nama_hadiah varchar(140) not null,
+  deskripsi text,
+  poin_dibutuhkan integer not null,
+  stok integer not null default 0,
+  status_hadiah status_hadiah_type not null default 'aktif',
+  created_at timestamptz not null default current_timestamp,
+  updated_at timestamptz not null default current_timestamp
+);
+
+drop trigger if exists trg_hadiah_updated_at on hadiah;
+create trigger trg_hadiah_updated_at
+before update on hadiah
+for each row execute function set_updated_at();
+
+create table if not exists penukaran_reward (
+  penukaran_id bigint generated by default as identity primary key,
+  user_id bigint not null references users(user_id) on delete cascade,
+  hadiah_id bigint not null references hadiah(hadiah_id) on delete restrict,
+  jumlah integer not null default 1,
+  total_poin_dipakai integer not null default 0,
+  status_penukaran status_penukaran_type not null default 'pending',
+  requested_at timestamptz not null default current_timestamp,
+  processed_at timestamptz,
+  processed_by bigint references users(user_id) on delete set null,
+  catatan text
+);
+
+create index if not exists idx_penukaran_user on penukaran_reward (user_id);
+create index if not exists idx_penukaran_hadiah on penukaran_reward (hadiah_id);
+create index if not exists idx_penukaran_status on penukaran_reward (status_penukaran);
+
+create table if not exists reward_transaksi (
+  reward_transaksi_id bigint generated by default as identity primary key,
+  user_id bigint not null references users(user_id) on delete cascade,
+  rule_id bigint references reward_rule(rule_id) on delete set null,
+  setoran_id bigint references setoran_minyak(setoran_id) on delete set null,
+  jenis_reward jenis_reward_type not null default 'setoran',
+  poin integer not null,
+  deskripsi varchar(255),
+  created_at timestamptz not null default current_timestamp
+);
+
+create index if not exists idx_reward_user on reward_transaksi (user_id);
+create index if not exists idx_reward_rule on reward_transaksi (rule_id);
+create index if not exists idx_reward_setoran on reward_transaksi (setoran_id);
+
+create table if not exists mutasi_point (
+  mutasi_id bigint generated by default as identity primary key,
+  user_id bigint not null references users(user_id) on delete cascade,
+  jenis_mutasi jenis_mutasi_type not null,
+  referensi_tabel varchar(64),
+  referensi_id bigint,
+  poin integer not null,
+  poin_sebelum integer not null default 0,
+  poin_sesudah integer not null default 0,
+  keterangan varchar(255),
+  created_at timestamptz not null default current_timestamp
+);
+
+create index if not exists idx_mutasi_user on mutasi_point (user_id);
+create index if not exists idx_mutasi_created on mutasi_point (created_at);
+
+insert into reward_rule (nama_rule, minimal_liter, poin_per_liter, bonus_poin, aktif)
+select 'Default Rule', 0, 10, 0, true
+where not exists (
+  select 1 from reward_rule where nama_rule = 'Default Rule'
+);
+
+insert into cabang (kode_cabang, nama_cabang, alamat)
+select 'CBG-UTAMA', 'Cabang Utama', 'Belum diatur'
+where not exists (
+  select 1 from cabang where kode_cabang = 'CBG-UTAMA'
+);
+
+insert into users (nama, email, password, status_akun, poin)
+select 'Petugas Admin', 'admin@setorminyak.local', md5('admin123'), 'petugas', 0
+where not exists (
+  select 1 from users where email = 'admin@setorminyak.local'
+);
+
+insert into petugas (user_id, jabatan, status_petugas)
+select u.user_id, 'Petugas Lapangan', 'aktif'
+from users u
+left join petugas p on p.user_id = u.user_id
+where u.email = 'admin@setorminyak.local'
+  and p.petugas_id is null;
+
+insert into saldo_poin (user_id, total_poin)
+select u.user_id, u.poin
+from users u
+left join saldo_poin sp on sp.user_id = u.user_id
+where sp.user_id is null;
+
+do $$
+begin
+  if to_regclass('public."user"') is not null then
+    insert into users (user_id, nama, email, password, status_akun, poin, tanggal_daftar)
+    select u.user_id, u.nama, u.email, u.password, coalesce(u.status_akun, 'aktif')::status_akun_type, coalesce(u.poin, 0), coalesce(u.tanggal_daftar, current_timestamp)
+    from public."user" u
+    left join users nu on nu.user_id = u.user_id
+    where nu.user_id is null;
+  end if;
+end $$;
