@@ -17,6 +17,26 @@ function readAuthUser(req) {
   }
 }
 
+async function runWithRetry(operation, attempts = 3) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (!['P2024', 'P2037'].includes(error?.code) || attempt === attempts) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
+  }
+
+  throw lastError;
+}
+
 export async function GET(req) {
   const authUser = readAuthUser(req);
 
@@ -25,7 +45,7 @@ export async function GET(req) {
   }
 
   try {
-    const [user, hadiahs] = await Promise.all([
+    const user = await runWithRetry(() =>
       prisma.user.findUnique({
         where: { user_id: authUser.user_id },
         select: {
@@ -36,7 +56,10 @@ export async function GET(req) {
             },
           },
         },
-      }),
+      })
+    );
+
+    const hadiahs = await runWithRetry(() =>
       prisma.hadiah.findMany({
         where: {
           status_hadiah: 'aktif',
@@ -45,6 +68,7 @@ export async function GET(req) {
           hadiah_id: true,
           nama_hadiah: true,
           deskripsi: true,
+          foto_contoh: true,
           poin_dibutuhkan: true,
           stok: true,
           status_hadiah: true,
@@ -53,8 +77,8 @@ export async function GET(req) {
           { poin_dibutuhkan: 'asc' },
           { hadiah_id: 'asc' },
         ],
-      }),
-    ]);
+      })
+    );
 
     const userPoin = user?.saldoPoin?.total_poin || user?.poin || 0;
 
@@ -65,6 +89,7 @@ export async function GET(req) {
         hadiah_id: Number(h.hadiah_id),
         nama_hadiah: h.nama_hadiah,
         deskripsi: h.deskripsi,
+        foto_contoh: h.foto_contoh,
         poin_dibutuhkan: h.poin_dibutuhkan,
         stok: h.stok,
         status_hadiah: h.status_hadiah,

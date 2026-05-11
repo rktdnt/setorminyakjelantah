@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { clearAuthCache, getAuthCache } from '@/lib/auth-cache';
+import { FiGift, FiLogOut, FiShield, FiSend } from 'react-icons/fi';
 
 const initialSummary = {
   poin: 0,
@@ -13,6 +14,7 @@ const initialSummary = {
 export default function DashboardPage() {
   const [userName, setUserName] = useState('Pengguna');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [cabangLabel, setCabangLabel] = useState('Cabang belum ditentukan');
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [summary, setSummary] = useState(initialSummary);
   const [summaryWarning, setSummaryWarning] = useState('');
@@ -26,10 +28,10 @@ export default function DashboardPage() {
       return;
     }
 
-    setUserName(cachedUser?.nama || 'Pengguna');
-    setIsAdmin(cachedUser?.role === 'admin');
-
     const loadSummary = async () => {
+      setUserName(cachedUser?.nama || 'Pengguna');
+      setIsAdmin(cachedUser?.role === 'admin');
+
       try {
         const response = await fetch('/api/user/summary');
         const data = await response.json();
@@ -40,6 +42,7 @@ export default function DashboardPage() {
 
         setSummary(data.summary || initialSummary);
         setUserName(data.user?.nama || cachedUser?.nama || 'Pengguna');
+        setCabangLabel(data.user?.cabang_label || 'Cabang belum ditentukan');
         setRecentActivity(Array.isArray(data.activity) ? data.activity : []);
 
         if (data.pointsApplied === false) {
@@ -52,7 +55,9 @@ export default function DashboardPage() {
       }
     };
 
-    loadSummary();
+    queueMicrotask(() => {
+      void loadSummary();
+    });
   }, []);
 
   const quickFacts = [
@@ -85,12 +90,25 @@ export default function DashboardPage() {
           <p className="m3-subtitle">
             Halo, {userName}. Pantau poin, lihat progres setoran, lalu kirim minyak dengan alur yang lebih rapi.
           </p>
+          <p className="m3-text">Lokasi cabang: {cabangLabel}</p>
 
           <div className="m3-row m3-home-actions">
-            <Link className="m3-button" href="/setor">Mulai Setor</Link>
-            <Link className="m3-link secondary" href="/hadiah">Tukar Hadiah</Link>
-            {isAdmin ? <Link className="m3-link tertiary" href="/admin">Panel Admin</Link> : null}
+            <Link className="m3-button" href="/setor">
+              <FiSend />
+              Mulai Setor
+            </Link>
+            <Link className="m3-link secondary" href="/hadiah">
+              <FiGift />
+              Tukar Hadiah
+            </Link>
+            {isAdmin ? (
+              <Link className="m3-link tertiary" href="/admin">
+                <FiShield />
+                Panel Admin
+              </Link>
+            ) : null}
             <button className="m3-button secondary" onClick={handleLogout} disabled={isLoggingOut}>
+              <FiLogOut />
               {isLoggingOut ? 'Keluar...' : 'Logout'}
             </button>
           </div>
@@ -120,31 +138,7 @@ export default function DashboardPage() {
         ))}
       </section>
 
-      <section className="m3-home-grid">
-        <article className="m3-card m3-stack m3-panel-card">
-          <div className="m3-row m3-row-space">
-            <h3 className="m3-section-title">Aksi Cepat</h3>
-            <span className="m3-chip">{isAdmin ? '3 pintasan' : '2 pintasan'}</span>
-          </div>
-
-          <div className="m3-cta-grid">
-            <Link className="m3-cta-tile primary" href="/setor">
-              <span className="m3-cta-label">Setor minyak</span>
-              <span className="m3-cta-meta">Buka formulir input</span>
-            </Link>
-            <Link className="m3-cta-tile secondary" href="/hadiah">
-              <span className="m3-cta-label">Tukar hadiah</span>
-              <span className="m3-cta-meta">Gunakan poin yang tersedia</span>
-            </Link>
-            {isAdmin ? (
-              <Link className="m3-cta-tile tertiary" href="/admin">
-                <span className="m3-cta-label">Panel admin</span>
-                <span className="m3-cta-meta">Moderasi setoran masuk</span>
-              </Link>
-            ) : null}
-          </div>
-        </article>
-
+      <section className="m3-stack">
         <article className="m3-card m3-stack m3-panel-card">
           <div className="m3-row m3-row-space">
             <h3 className="m3-section-title">Aktivitas Terbaru</h3>

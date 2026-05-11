@@ -30,5 +30,5 @@ export default async function AdminPage() {
     redirect('/dashboard');
   }
 
-  return <AdminDashboardClient />;
+  return <AdminDashboardClient userName={authUser.nama || 'Admin'} />;
 }

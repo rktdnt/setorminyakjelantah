@@ -40,6 +40,26 @@ const formatRelativeTime = (value) => {
   return `${days} hari lalu`;
 };
 
+async function runWithRetry(operation, attempts = 3) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (!['P2024', 'P2037'].includes(error?.code) || attempt === attempts) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
+  }
+
+  throw lastError;
+}
+
 export async function GET(req) {
   const authUser = readAuthUser(req);
 
@@ -48,7 +68,7 @@ export async function GET(req) {
   }
 
   try {
-    const [user, recentSetoran, recentPenukaran, pendingAgg, approvedAgg] = await Promise.all([
+    const user = await runWithRetry(() =>
       prisma.user.findUnique({
         where: { user_id: authUser.user_id },
         select: {
@@ -56,6 +76,12 @@ export async function GET(req) {
           nama: true,
           email: true,
           status_akun: true,
+          cabang: {
+            select: {
+              nama_cabang: true,
+              alamat: true,
+            },
+          },
           poin: true,
           saldoPoin: {
             select: {
@@ -63,7 +89,10 @@ export async function GET(req) {
             },
           },
         },
-      }),
+      })
+    );
+
+    const recentSetoran = await runWithRetry(() =>
       prisma.setoranMinyak.findMany({
         where: { user_id: authUser.user_id },
         select: {
@@ -74,7 +103,10 @@ export async function GET(req) {
         },
         orderBy: { tanggal_setor: 'desc' },
         take: 3,
-      }),
+      })
+    );
+
+    const recentPenukaran = await runWithRetry(() =>
       prisma.penukaranReward.findMany({
         where: { user_id: authUser.user_id },
         select: {
@@ -89,7 +121,10 @@ export async function GET(req) {
         },
         orderBy: { requested_at: 'desc' },
         take: 3,
-      }),
+      })
+    );
+
+    const pendingAgg = await runWithRetry(() =>
       prisma.setoranMinyak.aggregate({
         where: {
           user_id: authUser.user_id,
@@ -98,7 +133,10 @@ export async function GET(req) {
         _sum: {
           jumlah_liter: true,
         },
-      }),
+      })
+    );
+
+    const approvedAgg = await runWithRetry(() =>
       prisma.setoranMinyak.aggregate({
         where: {
           user_id: authUser.user_id,
@@ -107,8 +145,8 @@ export async function GET(req) {
         _sum: {
           jumlah_liter: true,
         },
-      }),
-    ]);
+      })
+    );
 
     if (!user) {
       return NextResponse.json({ success: false, message: 'User tidak ditemukan.' }, { status: 404 });
@@ -140,6 +178,9 @@ export async function GET(req) {
         nama: user.nama,
         email: user.email,
         status_akun: user.status_akun,
+        cabang_label: user.cabang
+          ? `${user.cabang.nama_cabang}${user.cabang.alamat ? ` - ${user.cabang.alamat}` : ''}`
+          : 'Cabang belum ditentukan',
       },
       summary: {
         poin: userPoin,

@@ -2,12 +2,47 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { getAuthCache } from '@/lib/auth-cache';
+import { FiImage, FiX } from 'react-icons/fi';
 
 export default function Setor() {
   const [liter, setLiter] = useState('');
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [statusType, setStatusType] = useState('');
+
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+
+    if (!['image/jpeg', 'image/png'].includes(selectedFile.type)) {
+      setStatus('Hanya JPG dan PNG yang diizinkan.');
+      setStatusType('error');
+      return;
+    }
+
+    if (selectedFile.size > 5 * 1024 * 1024) {
+      setStatus('Ukuran file maksimal 5MB.');
+      setStatusType('error');
+      return;
+    }
+
+    setFile(selectedFile);
+    setStatus('');
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setPreview(event.target?.result || '');
+    };
+    reader.readAsDataURL(selectedFile);
+  };
+
+  const clearFile = () => {
+    setFile(null);
+    setPreview('');
+  };
 
   const handleSubmit = async () => {
     setStatus('');
@@ -32,6 +67,30 @@ export default function Setor() {
     setIsLoading(true);
 
     try {
+      let fotoBukti = null;
+
+      // Upload file if provided
+      if (file) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const uploadResponse = await fetch('/api/setor/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const uploadData = await uploadResponse.json();
+
+        if (!uploadData.success) {
+          setStatus('Gagal upload foto. ' + (uploadData.error || ''));
+          setStatusType('error');
+          setIsLoading(false);
+          return;
+        }
+
+        fotoBukti = uploadData.path;
+      }
+
       const response = await fetch('/api/setor', {
         method: 'POST',
         headers: {
@@ -40,6 +99,7 @@ export default function Setor() {
         body: JSON.stringify({
           user_id: user.user_id,
           liter: parsedLiter,
+          foto_bukti: fotoBukti,
         }),
       });
 
@@ -49,6 +109,7 @@ export default function Setor() {
         setStatus('Setoran berhasil dikirim. Menunggu verifikasi admin.');
         setStatusType('success');
         setLiter('');
+        clearFile();
         return;
       }
 
@@ -80,6 +141,57 @@ export default function Setor() {
             onChange={(e) => setLiter(e.target.value)}
           />
         </label>
+
+        <label className="m3-stack">
+          <span className="m3-label">
+            <FiImage style={{ display: 'inline', marginRight: '8px' }} />
+            Foto Bukti Setoran
+          </span>
+          <span style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '8px' }}>
+            (Opsional - JPG atau PNG, maksimal 5MB)
+          </span>
+          <input
+            type="file"
+            accept="image/jpeg,image/png"
+            onChange={handleFileChange}
+            className="m3-input"
+            style={{ padding: '8px', cursor: 'pointer' }}
+          />
+        </label>
+
+        {preview && (
+          <div className="m3-stack" style={{ alignItems: 'center', position: 'relative' }}>
+            <img
+              src={preview}
+              alt="Preview"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '300px',
+                borderRadius: 'var(--md-sys-shape-corner-medium)',
+                border: '1px solid var(--md-sys-color-outline)',
+              }}
+            />
+            <button
+              type="button"
+              onClick={clearFile}
+              className="m3-button"
+              style={{
+                position: 'absolute',
+                top: '8px',
+                right: '8px',
+                width: '40px',
+                height: '40px',
+                padding: '0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="Hapus preview"
+            >
+              <FiX size={20} />
+            </button>
+          </div>
+        )}
 
         {status ? <p className={`m3-status ${statusType}`}>{status}</p> : null}
 

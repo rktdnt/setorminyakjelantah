@@ -152,6 +152,7 @@ model SetoranMinyak {
   verified_at         DateTime?           @db.Timestamptz()
   verified_by         BigInt?
   userVerified        User?               @relation("verified_by", fields: [verified_by], references: [user_id], onDelete: SetNull)
+  foto_bukti          String?
   created_at          DateTime            @default(now()) @db.Timestamptz()
   updated_at          DateTime            @default(now()) @updatedAt @db.Timestamptz()
 
@@ -181,6 +182,7 @@ model Hadiah {
   deskripsi           String?
   poin_dibutuhkan     Int
   stok                Int                 @default(0)
+  foto_contoh         String?
   status_hadiah       StatusHadiahType    @default(aktif)
   created_at          DateTime            @default(now()) @db.Timestamptz()
   updated_at          DateTime            @default(now()) @updatedAt @db.Timestamptz()

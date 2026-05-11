@@ -449,6 +449,14 @@ html {
   transition: transform 130ms ease, filter 130ms ease, box-shadow 130ms ease;
 }
 
+.m3-button svg,
+.m3-link svg,
+.m3-cta-tile svg,
+.m3-tab-btn svg,
+.m3-admin-action-btn svg {
+  flex: 0 0 auto;
+}
+
 .m3-link.tertiary {
   background: rgba(255, 255, 255, 0.58);
   color: var(--md-sys-color-on-surface);
@@ -581,6 +589,133 @@ html {
   transform: translateY(-1px);
 }
 
+.m3-tabs-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.m3-tab-btn {
+  appearance: none;
+  border: 1px solid rgba(74, 48, 48, 0.14);
+  border-radius: 999px;
+  min-height: 42px;
+  padding: 0.58rem 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--md-sys-color-on-surface);
+  font-size: 0.9rem;
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: var(--md-elevation-1);
+}
+
+.m3-tab-btn.active {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-color: transparent;
+}
+
+.m3-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border-radius: 24px;
+  border: 1px solid rgba(74, 48, 48, 0.12);
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.m3-form-grid .m3-row {
+  grid-column: 1 / -1;
+}
+
+.m3-password-wrap {
+  position: relative;
+}
+
+.m3-password-wrap .m3-input {
+  padding-right: 2.8rem;
+}
+
+.m3-password-toggle {
+  position: absolute;
+  right: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.m3-password-toggle:hover {
+  background: rgba(74, 48, 48, 0.08);
+}
+
+.m3-modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(39, 25, 23, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 40;
+  padding: 1rem;
+}
+
+.m3-modal {
+  width: min(520px, 100%);
+}
+
+.m3-login-page {
+  gap: 1.1rem;
+}
+
+.m3-login-card {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: 1.2rem;
+}
+
+.m3-login-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  align-items: stretch;
+}
+
+.m3-login-submit,
+.m3-login-register {
+  width: 100%;
+  min-height: 46px;
+  gap: 0.42rem;
+}
+
+.m3-login-forgot {
+  align-self: center;
+  margin-inline: auto;
+  justify-content: center;
+  gap: 0.38rem;
+}
+
+.m3-login-modal {
+  gap: 0.95rem;
+}
+
+.m3-login-modal .m3-row {
+  margin-top: 0.2rem;
+}
+
 .m3-admin-hero {
   background:
     linear-gradient(120deg, #fff1ef 0%, #ffe3de 52%, #fff4d6 100%),
@@ -690,6 +825,10 @@ html {
     grid-template-columns: 1fr;
   }
 
+  .m3-form-grid {
+    grid-template-columns: 1fr;
+  }
+
 }
 
 @media (max-width: 640px) {
@@ -710,6 +849,19 @@ html {
 
   .m3-home-hero {
     gap: 0.8rem;
+  }
+
+  .m3-login-card {
+    padding: 1rem;
+  }
+
+  .m3-login-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .m3-login-forgot {
+    width: fit-content;
+    margin-inline: auto;
   }
 
   .m3-hero-spotlight {

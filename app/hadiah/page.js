@@ -36,7 +36,9 @@ export default function HadiahPage() {
   };
 
   useEffect(() => {
-    loadData();
+    queueMicrotask(() => {
+      void loadData();
+    });
   }, []);
 
   const handleRedeem = async (item) => {
@@ -109,6 +111,20 @@ export default function HadiahPage() {
 
               return (
                 <article key={item.hadiah_id} className="m3-card m3-reward-card">
+                  {item.foto_contoh && (
+                    <img
+                      src={item.foto_contoh}
+                      alt={item.nama_hadiah}
+                      style={{
+                        width: '100%',
+                        height: '180px',
+                        objectFit: 'cover',
+                        borderRadius: 'var(--md-sys-shape-corner-medium)',
+                        marginBottom: '16px',
+                        border: '1px solid var(--md-sys-color-outline)',
+                      }}
+                    />
+                  )}
                   <p className="m3-title">{item.nama_hadiah}</p>
                   <p className="m3-text">{item.deskripsi || 'Hadiah penukaran poin'}</p>
                   <p className="m3-stat">{item.poin_dibutuhkan} poin</p>
@@ -137,6 +153,7 @@ export default function HadiahPage() {
           <table className="m3-table">
             <thead>
               <tr>
+                <th>Foto</th>
                 <th>Hadiah</th>
                 <th>Jumlah</th>
                 <th>Poin Dipakai</th>
@@ -147,11 +164,28 @@ export default function HadiahPage() {
             <tbody>
               {riwayat.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="m3-empty-cell">Belum ada riwayat penukaran.</td>
+                  <td colSpan={6} className="m3-empty-cell">Belum ada riwayat penukaran.</td>
                 </tr>
               ) : (
                 riwayat.map((row) => (
                   <tr key={row.penukaran_id}>
+                    <td>
+                      {row.foto_contoh ? (
+                        <img
+                          src={row.foto_contoh}
+                          alt={row.nama_hadiah}
+                          style={{
+                            width: '50px',
+                            height: '50px',
+                            objectFit: 'cover',
+                            borderRadius: 'var(--md-sys-shape-corner-small)',
+                            border: '1px solid var(--md-sys-color-outline)',
+                          }}
+                        />
+                      ) : (
+                        <span style={{ fontSize: '12px', color: 'var(--md-sys-color-outline)' }}>-</span>
+                      )}
+                    </td>
                     <td>{row.nama_hadiah}</td>
                     <td>{row.jumlah}</td>
                     <td>{row.total_poin_dipakai}</td>

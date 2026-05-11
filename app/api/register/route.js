@@ -4,12 +4,34 @@ import crypto from 'crypto';
 
 export async function POST(req) {
   try {
-    const { nama, email, password } = await req.json();
+    const { nama, email, password, cabang_id } = await req.json();
+
+    const parsedCabangId = Number(cabang_id);
+
+    if (!nama || !email || !password || !parsedCabangId) {
+      return NextResponse.json(
+        { success: false, message: 'Nama, email, password, dan cabang wajib diisi.' },
+        { status: 400 }
+      );
+    }
+
+    const cabang = await prisma.cabang.findFirst({
+      where: {
+        cabang_id: BigInt(parsedCabangId),
+        aktif: true,
+      },
+      select: { cabang_id: true },
+    });
+
+    if (!cabang) {
+      return NextResponse.json({ success: false, message: 'Cabang tidak valid atau nonaktif.' }, { status: 400 });
+    }
 
     const hashedPassword = crypto.createHash('md5').update(password).digest('hex');
 
     const user = await prisma.user.create({
       data: {
+        cabang_id: BigInt(parsedCabangId),
         nama,
         email,
         password: hashedPassword,

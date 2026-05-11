@@ -17,6 +17,26 @@ function readAuthUser(req) {
   }
 }
 
+async function runWithRetry(operation, attempts = 3) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+
+      if (!['P2024', 'P2037'].includes(error?.code) || attempt === attempts) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+    }
+  }
+
+  throw lastError;
+}
+
 export async function GET(req) {
   const authUser = readAuthUser(req);
 
@@ -25,14 +45,35 @@ export async function GET(req) {
   }
 
   try {
-    const [totalUsers, pendingSetoran, totalLiterResult, recentSetoran] = await Promise.all([
-      prisma.user.count(),
+    const adminProfile = await runWithRetry(() =>
+      prisma.user.findUnique({
+        where: { user_id: authUser.user_id },
+        select: {
+          cabang: {
+            select: {
+              nama_cabang: true,
+              alamat: true,
+            },
+          },
+        },
+      })
+    );
+
+    const totalUsers = await runWithRetry(() => prisma.user.count());
+
+    const pendingSetoran = await runWithRetry(() =>
       prisma.setoranMinyak.count({
         where: { status_verifikasi: 'pending' },
-      }),
+      })
+    );
+
+    const totalLiterResult = await runWithRetry(() =>
       prisma.setoranMinyak.aggregate({
         _sum: { jumlah_liter: true },
-      }),
+      })
+    );
+
+    const recentSetoran = await runWithRetry(() =>
       prisma.setoranMinyak.findMany({
         select: {
           setoran_id: true,
@@ -48,14 +89,19 @@ export async function GET(req) {
         },
         orderBy: { tanggal_setor: 'desc' },
         take: 8,
-      }),
-    ]);
+      })
+    );
 
     const totalLiter = totalLiterResult._sum.jumlah_liter || 0;
 
     return NextResponse.json({
       success: true,
       canModerate: authUser.role === 'admin',
+      admin: {
+        cabangLabel: adminProfile?.cabang
+          ? `${adminProfile.cabang.nama_cabang}${adminProfile.cabang.alamat ? ` - ${adminProfile.cabang.alamat}` : ''}`
+          : 'Cabang belum ditentukan',
+      },
       summary: {
         totalUsers,
         pendingSetoran,

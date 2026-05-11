@@ -38,6 +38,7 @@ export async function GET(req) {
         hadiah: {
           select: {
             nama_hadiah: true,
+            foto_contoh: true,
           },
         },
       },
@@ -54,6 +55,7 @@ export async function GET(req) {
       status_penukaran: item.status_penukaran,
       requested_at: item.requested_at,
       nama_hadiah: item.hadiah.nama_hadiah,
+      foto_contoh: item.hadiah.foto_contoh,
     }));
 
     return NextResponse.json({ success: true, items: formattedItems });
