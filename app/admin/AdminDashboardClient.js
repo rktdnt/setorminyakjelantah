@@ -64,6 +64,9 @@ export default function AdminDashboardClient({ userName = 'Admin' }) {
   const [cabangLabel, setCabangLabel] = useState('Cabang belum ditentukan');
   const [summary, setSummary] = useState(initialSummary);
   const [recent, setRecent] = useState([]);
+  const [setoranPage, setSetoranPage] = useState(1);
+  const [setoranTotalPages, setSetoranTotalPages] = useState(1);
+  const [setoranTotalItems, setSetoranTotalItems] = useState(0);
   const [hadiahList, setHadiahList] = useState([]);
   const [petugasList, setPetugasList] = useState([]);
   const [cabangList, setCabangList] = useState([]);
@@ -90,8 +93,8 @@ export default function AdminDashboardClient({ userName = 'Admin' }) {
     [summary]
   );
 
-  const loadDashboard = async () => {
-    const response = await fetch('/api/admin/dashboard');
+  const loadDashboard = async (page = 1) => {
+    const response = await fetch(`/api/admin/dashboard?page=${page}&limit=10`);
     const data = await response.json();
 
     if (!data.success) {
@@ -101,6 +104,11 @@ export default function AdminDashboardClient({ userName = 'Admin' }) {
     setSummary(data.summary || initialSummary);
     setRecent(Array.isArray(data.recent) ? data.recent : []);
     setCabangLabel(data.admin?.cabangLabel || 'Cabang belum ditentukan');
+    if (data.pagination) {
+      setSetoranPage(data.pagination.page);
+      setSetoranTotalPages(data.pagination.totalPages);
+      setSetoranTotalItems(data.pagination.totalItems);
+    }
   };
 
   const loadHadiah = async () => {
@@ -216,7 +224,7 @@ export default function AdminDashboardClient({ userName = 'Admin' }) {
 
       setStatus(action === 'approve' ? 'Setoran berhasil disetujui.' : 'Setoran berhasil ditolak.');
       setStatusType('success');
-      await loadDashboard();
+      await loadDashboard(setoranPage);
     } catch (error) {
       setStatus(error.message || 'Terjadi gangguan jaringan saat memproses aksi.');
       setStatusType('error');
@@ -568,8 +576,8 @@ export default function AdminDashboardClient({ userName = 'Admin' }) {
         <section className="m3-stack">
           <article className="m3-card m3-stack m3-panel-card">
             <div className="m3-row m3-row-space">
-              <h3 className="m3-section-title">Setoran Terbaru</h3>
-              <span className="m3-chip">{recent.length} data</span>
+              <h3 className="m3-section-title">Semua Setoran</h3>
+              <span className="m3-chip">{setoranTotalItems} data</span>
             </div>
 
             <div className="m3-table-wrap m3-admin-table-wrap">
@@ -646,6 +654,38 @@ export default function AdminDashboardClient({ userName = 'Admin' }) {
                 </tbody>
               </table>
             </div>
+
+            {setoranTotalPages > 1 && (
+              <div className="m3-row m3-row-space" style={{ paddingTop: '12px' }}>
+                <button
+                  className="m3-button secondary"
+                  type="button"
+                  disabled={setoranPage <= 1 || isLoading}
+                  onClick={() => {
+                    const prev = setoranPage - 1;
+                    setSetoranPage(prev);
+                    loadDashboard(prev);
+                  }}
+                >
+                  ← Sebelumnya
+                </button>
+                <span className="m3-text" style={{ fontSize: '14px' }}>
+                  Halaman {setoranPage} dari {setoranTotalPages}
+                </span>
+                <button
+                  className="m3-button secondary"
+                  type="button"
+                  disabled={setoranPage >= setoranTotalPages || isLoading}
+                  onClick={() => {
+                    const next = setoranPage + 1;
+                    setSetoranPage(next);
+                    loadDashboard(next);
+                  }}
+                >
+                  Selanjutnya →
+                </button>
+              </div>
+            )}
           </article>
         </section>
       ) : null}

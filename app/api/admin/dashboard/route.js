@@ -29,6 +29,11 @@ export async function GET(req) {
   try {
     await dbConnect();
 
+    const { searchParams } = new URL(req.url);
+    const page = Math.max(1, Number(searchParams.get('page')) || 1);
+    const limit = Math.min(50, Math.max(1, Number(searchParams.get('limit')) || 10));
+    const skip = (page - 1) * limit;
+
     const adminProfile = await User.findById(authUser.user_id)
       .select('cabang_id')
       .populate('cabang_id', 'nama_cabang alamat');
@@ -41,11 +46,14 @@ export async function GET(req) {
       { $group: { _id: null, total: { $sum: '$jumlah_liter' } } },
     ]);
 
+    const totalSetoran = await SetoranMinyak.countDocuments();
+
     const recentSetoran = await SetoranMinyak.find()
       .select('user_id tanggal_setor jumlah_liter status_verifikasi')
       .populate('user_id', 'nama')
       .sort({ tanggal_setor: -1 })
-      .limit(8);
+      .skip(skip)
+      .limit(limit);
 
     const totalLiter = totalLiterResult[0]?.total || 0;
     const cabang = adminProfile?.cabang_id; // populated
@@ -71,6 +79,12 @@ export async function GET(req) {
         jumlah_liter: parseFloat(item.jumlah_liter.toString()),
         status_verifikasi: item.status_verifikasi,
       })),
+      pagination: {
+        page,
+        limit,
+        totalItems: totalSetoran,
+        totalPages: Math.ceil(totalSetoran / limit),
+      },
     });
   } catch (error) {
     console.error('Dashboard error:', error);
