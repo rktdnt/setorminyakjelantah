@@ -1,22 +1,19 @@
-import { prisma } from '@/lib/prisma';
+import dbConnect from '@/lib/mongodb';
+import Cabang from '@/lib/models/Cabang';
 import { NextResponse } from 'next/server';
 
 export async function GET() {
   try {
-    const cabang = await prisma.cabang.findMany({
-      where: { aktif: true },
-      orderBy: { nama_cabang: 'asc' },
-      select: {
-        cabang_id: true,
-        kode_cabang: true,
-        nama_cabang: true,
-      },
-    });
+    await dbConnect();
+
+    const cabang = await Cabang.find({ aktif: true })
+      .sort({ nama_cabang: 1 })
+      .select('kode_cabang nama_cabang');
 
     return NextResponse.json({
       success: true,
       data: cabang.map((item) => ({
-        cabang_id: Number(item.cabang_id),
+        cabang_id: item._id.toString(),
         kode_cabang: item.kode_cabang,
         nama_cabang: item.nama_cabang,
       })),

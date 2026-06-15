@@ -1,4 +1,8 @@
-import { prisma } from '@/lib/prisma';
+import dbConnect from '@/lib/mongodb';
+import User from '@/lib/models/User';
+import SetoranMinyak from '@/lib/models/SetoranMinyak';
+import SaldoPoin from '@/lib/models/SaldoPoin';
+import PenukaranReward from '@/lib/models/PenukaranReward';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -40,26 +44,6 @@ const formatRelativeTime = (value) => {
   return `${days} hari lalu`;
 };
 
-async function runWithRetry(operation, attempts = 3) {
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-
-      if (!['P2024', 'P2037'].includes(error?.code) || attempt === attempts) {
-        throw error;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
-    }
-  }
-
-  throw lastError;
-}
-
 export async function GET(req) {
   const authUser = readAuthUser(req);
 
@@ -68,102 +52,54 @@ export async function GET(req) {
   }
 
   try {
-    const user = await runWithRetry(() =>
-      prisma.user.findUnique({
-        where: { user_id: authUser.user_id },
-        select: {
-          user_id: true,
-          nama: true,
-          email: true,
-          status_akun: true,
-          cabang: {
-            select: {
-              nama_cabang: true,
-              alamat: true,
-            },
-          },
-          poin: true,
-          saldoPoin: {
-            select: {
-              total_poin: true,
-            },
-          },
-        },
-      })
-    );
+    await dbConnect();
 
-    const recentSetoran = await runWithRetry(() =>
-      prisma.setoranMinyak.findMany({
-        where: { user_id: authUser.user_id },
-        select: {
-          jumlah_liter: true,
-          status_verifikasi: true,
-          tanggal_setor: true,
-          poin_didapat: true,
-        },
-        orderBy: { tanggal_setor: 'desc' },
-        take: 3,
-      })
-    );
+    const user = await User.findById(authUser.user_id)
+      .select('nama email status_akun cabang_id poin')
+      .populate('cabang_id', 'nama_cabang alamat');
 
-    const recentPenukaran = await runWithRetry(() =>
-      prisma.penukaranReward.findMany({
-        where: { user_id: authUser.user_id },
-        select: {
-          total_poin_dipakai: true,
-          status_penukaran: true,
-          requested_at: true,
-          hadiah: {
-            select: {
-              nama_hadiah: true,
-            },
-          },
-        },
-        orderBy: { requested_at: 'desc' },
-        take: 3,
-      })
-    );
+    const saldoPoin = await SaldoPoin.findOne({ user_id: authUser.user_id })
+      .select('total_poin');
 
-    const pendingAgg = await runWithRetry(() =>
-      prisma.setoranMinyak.aggregate({
-        where: {
-          user_id: authUser.user_id,
-          status_verifikasi: 'pending',
-        },
-        _sum: {
-          jumlah_liter: true,
-        },
-      })
-    );
+    const recentSetoran = await SetoranMinyak.find({ user_id: authUser.user_id })
+      .select('jumlah_liter status_verifikasi tanggal_setor poin_didapat')
+      .sort({ tanggal_setor: -1 })
+      .limit(3);
 
-    const approvedAgg = await runWithRetry(() =>
-      prisma.setoranMinyak.aggregate({
-        where: {
-          user_id: authUser.user_id,
-          status_verifikasi: 'approved',
-        },
-        _sum: {
-          jumlah_liter: true,
-        },
-      })
-    );
+    const recentPenukaran = await PenukaranReward.find({ user_id: authUser.user_id })
+      .select('total_poin_dipakai status_penukaran requested_at hadiah_id')
+      .populate('hadiah_id', 'nama_hadiah')
+      .sort({ requested_at: -1 })
+      .limit(3);
+
+    const pendingAgg = await SetoranMinyak.aggregate([
+      { $match: { user_id: user._id, status_verifikasi: 'pending' } },
+      { $group: { _id: null, total: { $sum: '$jumlah_liter' } } },
+    ]);
+
+    const approvedAgg = await SetoranMinyak.aggregate([
+      { $match: { user_id: user._id, status_verifikasi: 'approved' } },
+      { $group: { _id: null, total: { $sum: '$jumlah_liter' } } },
+    ]);
 
     if (!user) {
       return NextResponse.json({ success: false, message: 'User tidak ditemukan.' }, { status: 404 });
     }
 
-    const userPoin = user.saldoPoin?.total_poin || user.poin || 0;
-    const pendingLiter = parseFloat((pendingAgg._sum.jumlah_liter || 0).toString());
-    const approvedLiter = parseFloat((approvedAgg._sum.jumlah_liter || 0).toString());
+    const userPoin = saldoPoin?.total_poin || user.poin || 0;
+    const pendingLiter = pendingAgg[0]?.total || 0;
+    const approvedLiter = approvedAgg[0]?.total || 0;
+
+    const cabang = user.cabang_id; // populated
 
     const activity = [
       ...recentSetoran.map((item) => ({
-        title: `Setor ${parseFloat(item.jumlah_liter.toString()).toFixed(1)} L minyak`,
+        title: `Setor ${parseFloat(item.jumlah_liter).toFixed(1)} L minyak`,
         meta: `${formatRelativeTime(item.tanggal_setor)} • ${item.status_verifikasi || 'pending'}`,
         tone: item.status_verifikasi === 'approved' ? 'ok' : item.status_verifikasi === 'rejected' ? 'reject' : 'warn',
       })),
       ...recentPenukaran.map((item) => ({
-        title: `Tukar hadiah ${item.hadiah.nama_hadiah}`,
+        title: `Tukar hadiah ${item.hadiah_id?.nama_hadiah || '-'}`,
         meta: `${formatRelativeTime(item.requested_at)} • ${item.total_poin_dipakai} poin`,
         tone: item.status_penukaran === 'done' ? 'ok' : 'warn',
       })),
@@ -174,12 +110,12 @@ export async function GET(req) {
     return NextResponse.json({
       success: true,
       user: {
-        user_id: Number(user.user_id),
+        user_id: user._id.toString(),
         nama: user.nama,
         email: user.email,
         status_akun: user.status_akun,
-        cabang_label: user.cabang
-          ? `${user.cabang.nama_cabang}${user.cabang.alamat ? ` - ${user.cabang.alamat}` : ''}`
+        cabang_label: cabang
+          ? `${cabang.nama_cabang}${cabang.alamat ? ` - ${cabang.alamat}` : ''}`
           : 'Cabang belum ditentukan',
       },
       summary: {

@@ -1,4 +1,5 @@
-import { prisma } from '@/lib/prisma';
+import dbConnect from '@/lib/mongodb';
+import Cabang from '@/lib/models/Cabang';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -35,16 +36,14 @@ export async function GET(req) {
   }
 
   try {
-    const data = await prisma.cabang.findMany({
-      orderBy: {
-        created_at: 'desc',
-      },
-    });
+    await dbConnect();
+
+    const data = await Cabang.find().sort({ created_at: -1 });
 
     return NextResponse.json({
       success: true,
       data: data.map((item) => ({
-        cabang_id: Number(item.cabang_id),
+        cabang_id: item._id.toString(),
         kode_cabang: item.kode_cabang,
         nama_cabang: item.nama_cabang,
         alamat: item.alamat,
@@ -65,6 +64,8 @@ export async function POST(req) {
   }
 
   try {
+    await dbConnect();
+
     const { kode_cabang, nama_cabang, alamat = '' } = await req.json();
 
     if (!kode_cabang || !nama_cabang) {
@@ -74,19 +75,17 @@ export async function POST(req) {
       );
     }
 
-    const created = await prisma.cabang.create({
-      data: {
-        kode_cabang: String(kode_cabang).trim().toUpperCase(),
-        nama_cabang: String(nama_cabang).trim(),
-        alamat: String(alamat || '').trim() || null,
-        aktif: true,
-      },
+    const created = await Cabang.create({
+      kode_cabang: String(kode_cabang).trim().toUpperCase(),
+      nama_cabang: String(nama_cabang).trim(),
+      alamat: String(alamat || '').trim() || null,
+      aktif: true,
     });
 
     return NextResponse.json({
       success: true,
       data: {
-        cabang_id: Number(created.cabang_id),
+        cabang_id: created._id.toString(),
         kode_cabang: created.kode_cabang,
         nama_cabang: created.nama_cabang,
         alamat: created.alamat,
@@ -94,7 +93,7 @@ export async function POST(req) {
       },
     });
   } catch (error) {
-    if (error?.code === 'P2002') {
+    if (error?.code === 11000) {
       return NextResponse.json({ success: false, message: 'Kode cabang sudah digunakan.' }, { status: 409 });
     }
 
@@ -111,21 +110,28 @@ export async function PATCH(req) {
   }
 
   try {
+    await dbConnect();
+
     const { cabang_id, aktif } = await req.json();
 
     if (!cabang_id || typeof aktif !== 'boolean') {
       return NextResponse.json({ success: false, message: 'Permintaan tidak valid.' }, { status: 400 });
     }
 
-    const updated = await prisma.cabang.update({
-      where: { cabang_id: BigInt(cabang_id) },
-      data: { aktif },
-    });
+    const updated = await Cabang.findByIdAndUpdate(
+      cabang_id,
+      { aktif },
+      { new: true }
+    );
+
+    if (!updated) {
+      return NextResponse.json({ success: false, message: 'Cabang tidak ditemukan.' }, { status: 404 });
+    }
 
     return NextResponse.json({
       success: true,
       data: {
-        cabang_id: Number(updated.cabang_id),
+        cabang_id: updated._id.toString(),
         kode_cabang: updated.kode_cabang,
         nama_cabang: updated.nama_cabang,
         alamat: updated.alamat,

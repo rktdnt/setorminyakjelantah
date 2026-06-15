@@ -1,4 +1,11 @@
-import { prisma } from '@/lib/prisma';
+import mongoose from 'mongoose';
+import dbConnect from '@/lib/mongodb';
+import User from '@/lib/models/User';
+import SetoranMinyak from '@/lib/models/SetoranMinyak';
+import RewardRule from '@/lib/models/RewardRule';
+import SaldoPoin from '@/lib/models/SaldoPoin';
+import RewardTransaksi from '@/lib/models/RewardTransaksi';
+import MutasiPoint from '@/lib/models/MutasiPoint';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -19,17 +26,11 @@ function readAuthUser(req) {
 }
 
 async function pickRewardRule(liter) {
-  const rule = await prisma.rewardRule.findFirst({
-    where: {
-      aktif: true,
-      minimal_liter: {
-        lte: liter,
-      },
-    },
-    orderBy: {
-      minimal_liter: 'desc',
-    },
-  });
+  const rule = await RewardRule.findOne({
+    aktif: true,
+    minimal_liter: { $lte: liter },
+  })
+    .sort({ minimal_liter: -1 });
 
   return rule || null;
 }
@@ -51,11 +52,15 @@ export async function PATCH(req) {
   const nextStatus = normalizedAction === 'approve' ? 'approved' : 'rejected';
 
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      // Get the setoran with lock
-      const currentSetoran = await tx.setoranMinyak.findUnique({
-        where: { setoran_id: setoranId },
-      });
+    await dbConnect();
+    const session = await mongoose.startSession();
+    let result;
+
+    try {
+      session.startTransaction();
+
+      // Get the setoran
+      const currentSetoran = await SetoranMinyak.findById(setoranId).session(session);
 
       if (!currentSetoran) {
         throw new Error('SETORAN_NOT_FOUND');
@@ -65,10 +70,7 @@ export async function PATCH(req) {
       const liter = parseFloat(currentSetoran.jumlah_liter);
 
       // Get user's current points
-      const user = await tx.user.findUnique({
-        where: { user_id: currentSetoran.user_id },
-      });
-
+      const user = await User.findById(currentSetoran.user_id).session(session);
       const currentPoint = user?.poin || 0;
 
       // Pick reward rule if approving
@@ -82,16 +84,17 @@ export async function PATCH(req) {
 
       // Update setoran status
       if (previousStatus !== nextStatus) {
-        await tx.setoranMinyak.update({
-          where: { setoran_id: setoranId },
-          data: {
+        await SetoranMinyak.updateOne(
+          { _id: setoranId },
+          {
             status_verifikasi: nextStatus,
             verified_at: new Date(),
             verified_by: authUser.user_id,
             poin_didapat: nextStatus === 'approved' ? computedPoints : 0,
-            rule_id: nextStatus === 'approved' ? matchedRule?.rule_id || null : null,
+            rule_id: nextStatus === 'approved' ? matchedRule?._id || null : null,
           },
-        });
+          { session }
+        );
       }
 
       let pointsDelta = 0;
@@ -102,40 +105,33 @@ export async function PATCH(req) {
         pointsDelta = computedPoints;
 
         // Update user points
-        await tx.user.update({
-          where: { user_id: currentSetoran.user_id },
-          data: {
-            poin: {
-              increment: computedPoints,
-            },
-          },
-        });
+        await User.updateOne(
+          { _id: currentSetoran.user_id },
+          { $inc: { poin: computedPoints } },
+          { session }
+        );
 
         // Create reward transaction
-        await tx.rewardTransaksi.create({
-          data: {
-            user_id: currentSetoran.user_id,
-            rule_id: matchedRule?.rule_id || null,
-            setoran_id: setoranId,
-            jenis_reward: 'setoran',
-            poin: computedPoints,
-            deskripsi: `Reward verifikasi setoran #${setoranId}`,
-          },
-        });
+        await RewardTransaksi.create([{
+          user_id: currentSetoran.user_id,
+          rule_id: matchedRule?._id || null,
+          setoran_id: setoranId,
+          jenis_reward: 'setoran',
+          poin: computedPoints,
+          deskripsi: `Reward verifikasi setoran #${setoranId}`,
+        }], { session });
 
         // Create point mutation
-        await tx.mutasiPoint.create({
-          data: {
-            user_id: currentSetoran.user_id,
-            jenis_mutasi: 'credit',
-            referensi_tabel: 'setoran_minyak',
-            referensi_id: setoranId,
-            poin: computedPoints,
-            poin_sebelum: currentPoint,
-            poin_sesudah: currentPoint + computedPoints,
-            keterangan: `Credit poin dari verifikasi setoran #${setoranId}`,
-          },
-        });
+        await MutasiPoint.create([{
+          user_id: currentSetoran.user_id,
+          jenis_mutasi: 'credit',
+          referensi_tabel: 'setoran_minyak',
+          referensi_id: currentSetoran._id,
+          poin: computedPoints,
+          poin_sebelum: currentPoint,
+          poin_sesudah: currentPoint + computedPoints,
+          keterangan: `Credit poin dari verifikasi setoran #${setoranId}`,
+        }], { session });
       }
 
       if (previousStatus === 'approved' && nextStatus !== 'approved') {
@@ -143,57 +139,53 @@ export async function PATCH(req) {
         const safeDeduction = Math.max(0, previousAward);
 
         // Update user points (deduct)
-        await tx.user.update({
-          where: { user_id: currentSetoran.user_id },
-          data: {
-            poin: {
-              increment: -safeDeduction,
-            },
-          },
-        });
+        await User.updateOne(
+          { _id: currentSetoran.user_id },
+          { $inc: { poin: -safeDeduction } },
+          { session }
+        );
 
         // Create reward transaction (reversal)
-        await tx.rewardTransaksi.create({
-          data: {
-            user_id: currentSetoran.user_id,
-            rule_id: currentSetoran.rule_id || null,
-            setoran_id: setoranId,
-            jenis_reward: 'penyesuaian',
-            poin: -safeDeduction,
-            deskripsi: `Reversal poin karena perubahan status setoran #${setoranId}`,
-          },
-        });
+        await RewardTransaksi.create([{
+          user_id: currentSetoran.user_id,
+          rule_id: currentSetoran.rule_id || null,
+          setoran_id: setoranId,
+          jenis_reward: 'penyesuaian',
+          poin: -safeDeduction,
+          deskripsi: `Reversal poin karena perubahan status setoran #${setoranId}`,
+        }], { session });
 
         // Create point mutation (debit)
-        await tx.mutasiPoint.create({
-          data: {
-            user_id: currentSetoran.user_id,
-            jenis_mutasi: 'debit',
-            referensi_tabel: 'setoran_minyak',
-            referensi_id: setoranId,
-            poin: safeDeduction,
-            poin_sebelum: currentPoint,
-            poin_sesudah: Math.max(0, currentPoint - safeDeduction),
-            keterangan: `Debit poin dari pembatalan approve setoran #${setoranId}`,
-          },
-        });
+        await MutasiPoint.create([{
+          user_id: currentSetoran.user_id,
+          jenis_mutasi: 'debit',
+          referensi_tabel: 'setoran_minyak',
+          referensi_id: currentSetoran._id,
+          poin: safeDeduction,
+          poin_sebelum: currentPoint,
+          poin_sesudah: Math.max(0, currentPoint - safeDeduction),
+          keterangan: `Debit poin dari pembatalan approve setoran #${setoranId}`,
+        }], { session });
       }
 
-      // Update saldo poin
-      await tx.saldoPoin.upsert({
-        where: { user_id: currentSetoran.user_id },
-        update: {
-          total_poin: currentPoint + pointsDelta,
-          updated_at: new Date(),
+      // Update saldo poin (upsert)
+      await SaldoPoin.updateOne(
+        { user_id: currentSetoran.user_id },
+        {
+          $set: { total_poin: currentPoint + pointsDelta, updated_at: new Date() },
+          $setOnInsert: { user_id: currentSetoran.user_id },
         },
-        create: {
-          user_id: currentSetoran.user_id,
-          total_poin: currentPoint + pointsDelta,
-        },
-      });
+        { upsert: true, session }
+      );
 
-      return { pointsDelta };
-    });
+      await session.commitTransaction();
+      result = { pointsDelta };
+    } catch (txError) {
+      await session.abortTransaction();
+      throw txError;
+    } finally {
+      session.endSession();
+    }
 
     return NextResponse.json({
       success: true,

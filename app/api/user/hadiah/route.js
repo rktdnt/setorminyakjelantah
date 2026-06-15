@@ -1,4 +1,7 @@
-import { prisma } from '@/lib/prisma';
+import dbConnect from '@/lib/mongodb';
+import User from '@/lib/models/User';
+import Hadiah from '@/lib/models/Hadiah';
+import SaldoPoin from '@/lib/models/SaldoPoin';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -17,26 +20,6 @@ function readAuthUser(req) {
   }
 }
 
-async function runWithRetry(operation, attempts = 3) {
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-
-      if (!['P2024', 'P2037'].includes(error?.code) || attempt === attempts) {
-        throw error;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
-    }
-  }
-
-  throw lastError;
-}
-
 export async function GET(req) {
   const authUser = readAuthUser(req);
 
@@ -45,48 +28,22 @@ export async function GET(req) {
   }
 
   try {
-    const user = await runWithRetry(() =>
-      prisma.user.findUnique({
-        where: { user_id: authUser.user_id },
-        select: {
-          poin: true,
-          saldoPoin: {
-            select: {
-              total_poin: true,
-            },
-          },
-        },
-      })
-    );
+    await dbConnect();
 
-    const hadiahs = await runWithRetry(() =>
-      prisma.hadiah.findMany({
-        where: {
-          status_hadiah: 'aktif',
-        },
-        select: {
-          hadiah_id: true,
-          nama_hadiah: true,
-          deskripsi: true,
-          foto_contoh: true,
-          poin_dibutuhkan: true,
-          stok: true,
-          status_hadiah: true,
-        },
-        orderBy: [
-          { poin_dibutuhkan: 'asc' },
-          { hadiah_id: 'asc' },
-        ],
-      })
-    );
+    const user = await User.findById(authUser.user_id).select('poin');
+    const saldoPoin = await SaldoPoin.findOne({ user_id: authUser.user_id }).select('total_poin');
 
-    const userPoin = user?.saldoPoin?.total_poin || user?.poin || 0;
+    const hadiahs = await Hadiah.find({ status_hadiah: 'aktif' })
+      .select('nama_hadiah deskripsi foto_contoh poin_dibutuhkan stok status_hadiah')
+      .sort({ poin_dibutuhkan: 1, _id: 1 });
+
+    const userPoin = saldoPoin?.total_poin || user?.poin || 0;
 
     return NextResponse.json({
       success: true,
       poin: userPoin,
       hadiah: hadiahs.map(h => ({
-        hadiah_id: Number(h.hadiah_id),
+        hadiah_id: h._id.toString(),
         nama_hadiah: h.nama_hadiah,
         deskripsi: h.deskripsi,
         foto_contoh: h.foto_contoh,

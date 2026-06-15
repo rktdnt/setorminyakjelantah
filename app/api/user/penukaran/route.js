@@ -1,4 +1,11 @@
-import { prisma } from '@/lib/prisma';
+import mongoose from 'mongoose';
+import dbConnect from '@/lib/mongodb';
+import User from '@/lib/models/User';
+import Hadiah from '@/lib/models/Hadiah';
+import SaldoPoin from '@/lib/models/SaldoPoin';
+import PenukaranReward from '@/lib/models/PenukaranReward';
+import RewardTransaksi from '@/lib/models/RewardTransaksi';
+import MutasiPoint from '@/lib/models/MutasiPoint';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -25,37 +32,22 @@ export async function GET(req) {
   }
 
   try {
-    const items = await prisma.penukaranReward.findMany({
-      where: {
-        user_id: authUser.user_id,
-      },
-      select: {
-        penukaran_id: true,
-        jumlah: true,
-        total_poin_dipakai: true,
-        status_penukaran: true,
-        requested_at: true,
-        hadiah: {
-          select: {
-            nama_hadiah: true,
-            foto_contoh: true,
-          },
-        },
-      },
-      orderBy: {
-        requested_at: 'desc',
-      },
-      take: 20,
-    });
+    await dbConnect();
+
+    const items = await PenukaranReward.find({ user_id: authUser.user_id })
+      .select('jumlah total_poin_dipakai status_penukaran requested_at hadiah_id')
+      .populate('hadiah_id', 'nama_hadiah foto_contoh')
+      .sort({ requested_at: -1 })
+      .limit(20);
 
     const formattedItems = items.map(item => ({
-      penukaran_id: Number(item.penukaran_id),
+      penukaran_id: item._id.toString(),
       jumlah: item.jumlah,
       total_poin_dipakai: item.total_poin_dipakai,
       status_penukaran: item.status_penukaran,
       requested_at: item.requested_at,
-      nama_hadiah: item.hadiah.nama_hadiah,
-      foto_contoh: item.hadiah.foto_contoh,
+      nama_hadiah: item.hadiah_id?.nama_hadiah || '-',
+      foto_contoh: item.hadiah_id?.foto_contoh || null,
     }));
 
     return NextResponse.json({ success: true, items: formattedItems });
@@ -73,19 +65,23 @@ export async function POST(req) {
   }
 
   const body = await req.json();
-  const hadiahId = Number(body?.hadiah_id);
+  const hadiahId = body?.hadiah_id;
   const jumlah = Math.max(1, Number(body?.jumlah || 1));
 
-  if (!hadiahId || !Number.isFinite(hadiahId)) {
+  if (!hadiahId) {
     return NextResponse.json({ success: false, message: 'Hadiah tidak valid.' }, { status: 400 });
   }
 
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      // Get hadiah with lock
-      const gift = await tx.hadiah.findUnique({
-        where: { hadiah_id: hadiahId },
-      });
+    await dbConnect();
+    const session = await mongoose.startSession();
+    let result;
+
+    try {
+      session.startTransaction();
+
+      // Get hadiah
+      const gift = await Hadiah.findById(hadiahId).session(session);
 
       if (!gift || gift.status_hadiah !== 'aktif') {
         throw new Error('HADIAH_NOT_AVAILABLE');
@@ -95,10 +91,8 @@ export async function POST(req) {
         throw new Error('INSUFFICIENT_STOCK');
       }
 
-      // Get user with lock
-      const user = await tx.user.findUnique({
-        where: { user_id: authUser.user_id },
-      });
+      // Get user
+      const user = await User.findById(authUser.user_id).session(session);
 
       const pointBefore = user?.poin || 0;
       const totalPoinDipakai = (gift.poin_dibutuhkan || 0) * jumlah;
@@ -108,84 +102,76 @@ export async function POST(req) {
       }
 
       // Update user points
-      await tx.user.update({
-        where: { user_id: authUser.user_id },
-        data: {
-          poin: {
-            decrement: totalPoinDipakai,
-          },
-        },
-      });
+      await User.updateOne(
+        { _id: authUser.user_id },
+        { $inc: { poin: -totalPoinDipakai } },
+        { session }
+      );
 
       // Update hadiah stock
-      await tx.hadiah.update({
-        where: { hadiah_id: hadiahId },
-        data: {
-          stok: {
-            decrement: jumlah,
-          },
-        },
-      });
+      await Hadiah.updateOne(
+        { _id: hadiahId },
+        { $inc: { stok: -jumlah } },
+        { session }
+      );
 
       // Create penukaran record
-      const penukaran = await tx.penukaranReward.create({
-        data: {
-          user_id: authUser.user_id,
-          hadiah_id: hadiahId,
-          jumlah,
-          total_poin_dipakai: totalPoinDipakai,
-          status_penukaran: 'done',
-          requested_at: new Date(),
-          processed_at: new Date(),
-        },
-      });
+      const [penukaran] = await PenukaranReward.create([{
+        user_id: authUser.user_id,
+        hadiah_id: hadiahId,
+        jumlah,
+        total_poin_dipakai: totalPoinDipakai,
+        status_penukaran: 'done',
+        requested_at: new Date(),
+        processed_at: new Date(),
+      }], { session });
 
       // Create reward transaction
-      await tx.rewardTransaksi.create({
-        data: {
-          user_id: authUser.user_id,
-          jenis_reward: 'penyesuaian',
-          poin: -totalPoinDipakai,
-          deskripsi: `Penukaran hadiah #${penukaran.penukaran_id} - ${gift.nama_hadiah}`,
-        },
-      });
+      await RewardTransaksi.create([{
+        user_id: authUser.user_id,
+        jenis_reward: 'penyesuaian',
+        poin: -totalPoinDipakai,
+        deskripsi: `Penukaran hadiah #${penukaran._id} - ${gift.nama_hadiah}`,
+      }], { session });
 
       // Create point mutation
       const pointAfter = Math.max(0, pointBefore - totalPoinDipakai);
-      await tx.mutasiPoint.create({
-        data: {
-          user_id: authUser.user_id,
-          jenis_mutasi: 'debit',
-          referensi_tabel: 'penukaran_reward',
-          referensi_id: penukaran.penukaran_id,
-          poin: -totalPoinDipakai,
-          poin_sebelum: pointBefore,
-          poin_sesudah: pointAfter,
-          keterangan: `Penukaran hadiah ${gift.nama_hadiah}`,
-        },
-      });
+      await MutasiPoint.create([{
+        user_id: authUser.user_id,
+        jenis_mutasi: 'debit',
+        referensi_tabel: 'penukaran_reward',
+        referensi_id: penukaran._id,
+        poin: -totalPoinDipakai,
+        poin_sebelum: pointBefore,
+        poin_sesudah: pointAfter,
+        keterangan: `Penukaran hadiah ${gift.nama_hadiah}`,
+      }], { session });
 
-      // Update saldo poin
-      await tx.saldoPoin.upsert({
-        where: { user_id: authUser.user_id },
-        update: {
-          total_poin: pointAfter,
-          updated_at: new Date(),
+      // Update saldo poin (upsert)
+      await SaldoPoin.updateOne(
+        { user_id: authUser.user_id },
+        {
+          $set: { total_poin: pointAfter, updated_at: new Date() },
+          $setOnInsert: { user_id: authUser.user_id },
         },
-        create: {
-          user_id: authUser.user_id,
-          total_poin: pointAfter,
-        },
-      });
+        { upsert: true, session }
+      );
 
-      return {
-        penukaranId: penukaran.penukaran_id,
+      await session.commitTransaction();
+
+      result = {
+        penukaranId: penukaran._id,
         namaHadiah: gift.nama_hadiah,
         pointBefore,
         totalPoinDipakai,
         pointAfter,
       };
-    });
+    } catch (txError) {
+      await session.abortTransaction();
+      throw txError;
+    } finally {
+      session.endSession();
+    }
 
     return NextResponse.json({
       success: true,

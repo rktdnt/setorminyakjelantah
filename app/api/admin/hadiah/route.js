@@ -1,4 +1,5 @@
-import { prisma } from '@/lib/prisma';
+import dbConnect from '@/lib/mongodb';
+import Hadiah from '@/lib/models/Hadiah';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -27,26 +28,6 @@ function ensureAdmin(req) {
   return null;
 }
 
-async function runWithRetry(operation, attempts = 3) {
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-
-      if (error?.code !== 'P2024' || attempt === attempts) {
-        throw error;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
-    }
-  }
-
-  throw lastError;
-}
-
 export async function GET(req) {
   const forbidden = ensureAdmin(req);
 
@@ -55,15 +36,22 @@ export async function GET(req) {
   }
 
   try {
-    const hadiah = await prisma.hadiah.findMany({
-      orderBy: { hadiah_id: 'desc' },
-    });
+    await dbConnect();
+
+    const hadiah = await Hadiah.find().sort({ _id: -1 });
 
     return NextResponse.json({
       success: true,
       data: hadiah.map((item) => ({
-        ...item,
-        hadiah_id: Number(item.hadiah_id),
+        hadiah_id: item._id.toString(),
+        nama_hadiah: item.nama_hadiah,
+        deskripsi: item.deskripsi,
+        poin_dibutuhkan: item.poin_dibutuhkan,
+        stok: item.stok,
+        foto_contoh: item.foto_contoh,
+        status_hadiah: item.status_hadiah,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
       })),
     });
   } catch (error) {
@@ -80,6 +68,8 @@ export async function POST(req) {
   }
 
   try {
+    await dbConnect();
+
     const { nama_hadiah, poin_dibutuhkan, stok = 0, deskripsi = '', foto_contoh = null } = await req.json();
 
     if (!nama_hadiah || !poin_dibutuhkan) {
@@ -89,24 +79,27 @@ export async function POST(req) {
       );
     }
 
-    const created = await runWithRetry(() =>
-      prisma.hadiah.create({
-        data: {
-          nama_hadiah,
-          poin_dibutuhkan: Number(poin_dibutuhkan),
-          stok: Number(stok),
-          deskripsi,
-          foto_contoh: foto_contoh || null,
-          status_hadiah: 'aktif',
-        },
-      })
-    );
+    const created = await Hadiah.create({
+      nama_hadiah,
+      poin_dibutuhkan: Number(poin_dibutuhkan),
+      stok: Number(stok),
+      deskripsi,
+      foto_contoh: foto_contoh || null,
+      status_hadiah: 'aktif',
+    });
 
     return NextResponse.json({
       success: true,
       data: {
-        ...created,
-        hadiah_id: Number(created.hadiah_id),
+        hadiah_id: created._id.toString(),
+        nama_hadiah: created.nama_hadiah,
+        deskripsi: created.deskripsi,
+        poin_dibutuhkan: created.poin_dibutuhkan,
+        stok: created.stok,
+        foto_contoh: created.foto_contoh,
+        status_hadiah: created.status_hadiah,
+        created_at: created.created_at,
+        updated_at: created.updated_at,
       },
     });
   } catch (error) {
@@ -123,6 +116,8 @@ export async function PATCH(req) {
   }
 
   try {
+    await dbConnect();
+
     const { hadiah_id, status_hadiah } = await req.json();
     const normalizedStatus = String(status_hadiah || '').toLowerCase();
 
@@ -130,18 +125,28 @@ export async function PATCH(req) {
       return NextResponse.json({ success: false, message: 'Permintaan tidak valid.' }, { status: 400 });
     }
 
-    const updated = await prisma.hadiah.update({
-      where: { hadiah_id: BigInt(hadiah_id) },
-      data: {
-        status_hadiah: normalizedStatus,
-      },
-    });
+    const updated = await Hadiah.findByIdAndUpdate(
+      hadiah_id,
+      { status_hadiah: normalizedStatus },
+      { new: true }
+    );
+
+    if (!updated) {
+      return NextResponse.json({ success: false, message: 'Hadiah tidak ditemukan.' }, { status: 404 });
+    }
 
     return NextResponse.json({
       success: true,
       data: {
-        ...updated,
-        hadiah_id: Number(updated.hadiah_id),
+        hadiah_id: updated._id.toString(),
+        nama_hadiah: updated.nama_hadiah,
+        deskripsi: updated.deskripsi,
+        poin_dibutuhkan: updated.poin_dibutuhkan,
+        stok: updated.stok,
+        foto_contoh: updated.foto_contoh,
+        status_hadiah: updated.status_hadiah,
+        created_at: updated.created_at,
+        updated_at: updated.updated_at,
       },
     });
   } catch (error) {

@@ -1,5 +1,9 @@
+import mongoose from 'mongoose';
 import crypto from 'crypto';
-import { prisma } from '@/lib/prisma';
+import dbConnect from '@/lib/mongodb';
+import User from '@/lib/models/User';
+import Petugas from '@/lib/models/Petugas';
+import Cabang from '@/lib/models/Cabang';
 import { NextResponse } from 'next/server';
 
 const AUTH_COOKIE = 'smj_auth';
@@ -36,33 +40,22 @@ export async function GET(req) {
   }
 
   try {
-    const petugas = await prisma.petugas.findMany({
-      include: {
-        user: {
-          select: {
-            user_id: true,
-            nama: true,
-            email: true,
-          },
-        },
-        cabang: {
-          select: {
-            nama_cabang: true,
-          },
-        },
-      },
-      orderBy: { petugas_id: 'desc' },
-    });
+    await dbConnect();
+
+    const petugas = await Petugas.find()
+      .populate('user_id', 'nama email')
+      .populate('cabang_id', 'nama_cabang')
+      .sort({ _id: -1 });
 
     return NextResponse.json({
       success: true,
       data: petugas.map((item) => ({
-        petugas_id: Number(item.petugas_id),
-        user_id: Number(item.user_id),
-        nama: item.user?.nama || '-',
-        email: item.user?.email || '-',
-        cabang_id: item.cabang_id ? Number(item.cabang_id) : null,
-        cabang_nama: item.cabang?.nama_cabang || '-',
+        petugas_id: item._id.toString(),
+        user_id: item.user_id?._id?.toString() || '',
+        nama: item.user_id?.nama || '-',
+        email: item.user_id?.email || '-',
+        cabang_id: item.cabang_id?._id?.toString() || null,
+        cabang_nama: item.cabang_id?.nama_cabang || '-',
         jabatan: item.jabatan,
         status_petugas: item.status_petugas,
       })),
@@ -81,23 +74,18 @@ export async function POST(req) {
   }
 
   try {
-    const { nama, email, password, jabatan = null, cabang_id } = await req.json();
-    const parsedCabangId = Number(cabang_id);
+    await dbConnect();
 
-    if (!nama || !email || !password || !parsedCabangId) {
+    const { nama, email, password, jabatan = null, cabang_id } = await req.json();
+
+    if (!nama || !email || !password || !cabang_id) {
       return NextResponse.json(
         { success: false, message: 'Nama, email, password, dan cabang petugas wajib diisi.' },
         { status: 400 }
       );
     }
 
-    const cabang = await prisma.cabang.findFirst({
-      where: {
-        cabang_id: BigInt(parsedCabangId),
-        aktif: true,
-      },
-      select: { cabang_id: true },
-    });
+    const cabang = await Cabang.findOne({ _id: cabang_id, aktif: true }).select('_id nama_cabang');
 
     if (!cabang) {
       return NextResponse.json({ success: false, message: 'Cabang tidak valid atau nonaktif.' }, { status: 400 });
@@ -105,48 +93,49 @@ export async function POST(req) {
 
     const hashedPassword = crypto.createHash('md5').update(password).digest('hex');
 
-    const created = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          cabang_id: BigInt(parsedCabangId),
-          nama,
-          email,
-          password: hashedPassword,
-          status_akun: 'petugas',
-        },
-      });
+    const session = await mongoose.startSession();
+    let created;
 
-      const petugas = await tx.petugas.create({
-        data: {
-          user_id: user.user_id,
-          cabang_id: BigInt(parsedCabangId),
-          jabatan,
-          status_petugas: 'aktif',
-        },
-        include: {
-          cabang: {
-            select: {
-              nama_cabang: true,
-            },
-          },
-        },
-      });
+    try {
+      session.startTransaction();
 
-      return {
-        petugas_id: Number(petugas.petugas_id),
-        user_id: Number(user.user_id),
+      const [user] = await User.create([{
+        cabang_id: cabang._id,
+        nama,
+        email,
+        password: hashedPassword,
+        status_akun: 'petugas',
+      }], { session });
+
+      const [petugas] = await Petugas.create([{
+        user_id: user._id,
+        cabang_id: cabang._id,
+        jabatan,
+        status_petugas: 'aktif',
+      }], { session });
+
+      await session.commitTransaction();
+
+      created = {
+        petugas_id: petugas._id.toString(),
+        user_id: user._id.toString(),
         nama: user.nama,
         email: user.email,
-        cabang_id: parsedCabangId,
-        cabang_nama: petugas.cabang?.nama_cabang || '-',
+        cabang_id: cabang._id.toString(),
+        cabang_nama: cabang.nama_cabang || '-',
         jabatan: petugas.jabatan,
         status_petugas: petugas.status_petugas,
       };
-    });
+    } catch (txError) {
+      await session.abortTransaction();
+      throw txError;
+    } finally {
+      session.endSession();
+    }
 
     return NextResponse.json({ success: true, data: created });
   } catch (error) {
-    if (error?.code === 'P2002') {
+    if (error?.code === 11000) {
       return NextResponse.json({ success: false, message: 'Email sudah digunakan.' }, { status: 409 });
     }
 
@@ -163,6 +152,8 @@ export async function PATCH(req) {
   }
 
   try {
+    await dbConnect();
+
     const { petugas_id, status_petugas } = await req.json();
     const normalizedStatus = String(status_petugas || '').toLowerCase();
 
@@ -170,28 +161,46 @@ export async function PATCH(req) {
       return NextResponse.json({ success: false, message: 'Permintaan tidak valid.' }, { status: 400 });
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const petugas = await tx.petugas.update({
-        where: { petugas_id: BigInt(petugas_id) },
-        data: { status_petugas: normalizedStatus },
-      });
+    const session = await mongoose.startSession();
+    let updated;
 
-      const user = await tx.user.update({
-        where: { user_id: petugas.user_id },
-        data: { status_akun: normalizedStatus === 'aktif' ? 'petugas' : 'nonaktif' },
-      });
+    try {
+      session.startTransaction();
 
-      return {
-        petugas_id: Number(petugas.petugas_id),
-        user_id: Number(user.user_id),
+      const petugas = await Petugas.findByIdAndUpdate(
+        petugas_id,
+        { status_petugas: normalizedStatus },
+        { new: true, session }
+      );
+
+      if (!petugas) {
+        throw new Error('PETUGAS_NOT_FOUND');
+      }
+
+      const user = await User.findByIdAndUpdate(
+        petugas.user_id,
+        { status_akun: normalizedStatus === 'aktif' ? 'petugas' : 'nonaktif' },
+        { new: true, session }
+      );
+
+      await session.commitTransaction();
+
+      updated = {
+        petugas_id: petugas._id.toString(),
+        user_id: user._id.toString(),
         nama: user.nama,
         email: user.email,
-        cabang_id: petugas.cabang_id ? Number(petugas.cabang_id) : null,
+        cabang_id: petugas.cabang_id?.toString() || null,
         cabang_nama: '-',
         jabatan: petugas.jabatan,
         status_petugas: petugas.status_petugas,
       };
-    });
+    } catch (txError) {
+      await session.abortTransaction();
+      throw txError;
+    } finally {
+      session.endSession();
+    }
 
     return NextResponse.json({ success: true, data: updated });
   } catch (error) {

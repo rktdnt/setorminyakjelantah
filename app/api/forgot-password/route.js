@@ -1,9 +1,11 @@
-import { prisma } from '@/lib/prisma';
+import dbConnect from '@/lib/mongodb';
+import User from '@/lib/models/User';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 
 export async function POST(req) {
   try {
+    await dbConnect();
     const { email, password } = await req.json();
 
     if (!email || !password) {
@@ -14,10 +16,7 @@ export async function POST(req) {
       return NextResponse.json({ success: false, message: 'Password baru minimal 6 karakter.' }, { status: 400 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-      select: { user_id: true },
-    });
+    const user = await User.findOne({ email }).select('_id');
 
     if (!user) {
       return NextResponse.json({ success: false, message: 'Email tidak ditemukan.' }, { status: 404 });
@@ -25,12 +24,10 @@ export async function POST(req) {
 
     const hashedPassword = crypto.createHash('md5').update(String(password)).digest('hex');
 
-    await prisma.user.update({
-      where: { user_id: user.user_id },
-      data: {
-        password: hashedPassword,
-      },
-    });
+    await User.updateOne(
+      { _id: user._id },
+      { password: hashedPassword }
+    );
 
     return NextResponse.json({
       success: true,
