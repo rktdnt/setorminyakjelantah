@@ -1,5 +1,6 @@
 import dbConnect from '@/lib/mongodb';
 import User from '@/lib/models/User';
+import Cabang from '@/lib/models/Cabang';
 import SetoranMinyak from '@/lib/models/SetoranMinyak';
 import { NextResponse } from 'next/server';
 

@@ -1,5 +1,7 @@
 import dbConnect from '@/lib/mongodb';
 import User from '@/lib/models/User';
+import Cabang from '@/lib/models/Cabang';
+import Hadiah from '@/lib/models/Hadiah';
 import SetoranMinyak from '@/lib/models/SetoranMinyak';
 import SaldoPoin from '@/lib/models/SaldoPoin';
 import PenukaranReward from '@/lib/models/PenukaranReward';
